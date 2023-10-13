@@ -64,10 +64,8 @@ class Logger(object):
     def critical(self, msg, *args, **kwargs):
         self.error_log.critical(msg, *args, **kwargs)
 
-    def error(self, exc, val, tb):
-        from traceback import format_exception
-        msg = ''.join(format_exception(exc, val, tb))
-        self.error_log.error(msg)
+    def error(self, *args, **kwargs):
+        self.error_log.error(*args, **kwargs)
 
     def warning(self, msg, *args, **kwargs):
         self.error_log.warning(msg, *args, **kwargs)
@@ -82,7 +80,7 @@ class Logger(object):
         self.error_log.exception(msg, *args)
 
     def log(self, lvl, msg, *args, **kwargs):
-        if isinstance(lvl, basestring):
+        if isinstance(lvl, str):
             lvl = self.LOG_LEVELS.get(lvl.lower(), logging.INFO)
         self.error_log.log(lvl, msg, *args, **kwargs)
 
@@ -172,10 +170,8 @@ class Logger(object):
         h.setFormatter(fmt)
         log.addHandler(h)
 
-def _error(self, exc, val, tb):
-    from traceback import format_exception
-    msg = ''.join(format_exception(exc, val, tb))
-    self.error_log.error(msg)
+def _error(self, *args, **kwargs):
+    self.error_log.error(*args, **kwargs)
 
 def _access(self, environ):
     """ Seee http://httpd.apache.org/docs/2.0/logs.html#combined
