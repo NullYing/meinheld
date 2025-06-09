@@ -33,7 +33,7 @@ PyObject *greenlet_setparent(PyObject *g, PyObject *parent) {
 
 PyObject *greenlet_getparent(PyObject *g) {
   import_greenlet();
-  return (PyObject *)PyGreenlet_GET_PARENT((PyGreenlet *)g);
+  return (PyObject *)PyGreenlet_GetParent((PyGreenlet *)g);
 }
 
 PyObject *greenlet_switch(PyObject *g, PyObject *args, PyObject *kwargs) {

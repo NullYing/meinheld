@@ -74,7 +74,7 @@ else:
     define_macros=[
             ("WITH_GREENLET",None),
             ("HTTP_PARSER_DEBUG", "0") ]
-    install_requires=['greenlet>=0.4.5']
+    install_requires=['greenlet>=3.0.0,<4.0.0']
 
 if develop:
     define_macros.append(("DEVELOP",None))
@@ -113,6 +113,7 @@ setup(name='meinheld',
             define_macros=define_macros
         )],
 
+    python_requires='>=3.9',
     classifiers=[
         'Development Status :: 5 - Production/Stable',
         'Environment :: Web Environment',
@@ -124,6 +125,11 @@ setup(name='meinheld',
         'Programming Language :: C',
         'Programming Language :: Python',
         'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3.9',
+        'Programming Language :: Python :: 3.10',
+        'Programming Language :: Python :: 3.11',
+        'Programming Language :: Python :: 3.12',
+        'Programming Language :: Python :: 3.13',
         'Topic :: Internet :: WWW/HTTP :: WSGI :: Server'
     ],
 )
