@@ -58,8 +58,7 @@ void fire_timer(TimerObject *timer) {
       }
     } else {
       DEBUG("call timer:%p", timer);
-      res = PyEval_CallObjectWithKeywords(timer->callback, timer->args,
-                                          timer->kwargs);
+      res = PyObject_Call(timer->callback, timer->args, timer->kwargs);
     }
     Py_XDECREF(res);
     DEBUG("called timer %p", timer);
@@ -87,10 +86,10 @@ static int TimerObject_traverse(TimerObject *self, visitproc visit, void *arg) {
 static void TimerObject_dealloc(TimerObject *self) {
   GDEBUG("self %p", self);
   PyObject_GC_UnTrack(self);
-  Py_TRASHCAN_SAFE_BEGIN(self);
+  Py_TRASHCAN_BEGIN(self, TimerObject_dealloc);
   TimerObject_clear(self);
   PyObject_GC_Del(self);
-  Py_TRASHCAN_SAFE_END(self);
+  Py_TRASHCAN_END;
 }
 
 static PyObject *TimerObject_cancel(TimerObject *self, PyObject *args) {

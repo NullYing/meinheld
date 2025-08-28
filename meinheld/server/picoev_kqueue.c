@@ -42,7 +42,7 @@
 #define BACKEND_BUILD(next_fd, events) \
   ((unsigned)((next_fd << 8) | (events & 0xff)))
 #define BACKEND_GET_NEXT_FD(backend) ((int)(backend) >> 8)
-#define BACKEND_GET_OLD_EVENTS(backend) ((int)(backend)&0xff)
+#define BACKEND_GET_OLD_EVENTS(backend) ((int)(backend) & 0xff)
 
 typedef struct picoev_loop_kqueue_st {
   picoev_loop loop;
@@ -55,10 +55,10 @@ typedef struct picoev_loop_kqueue_st {
 picoev_globals picoev;
 
 static int apply_pending_changes(picoev_loop_kqueue* loop, int apply_all) {
-#define SET(op, events)                                         \
-  EV_SET(loop->changelist + cl_off++, loop->changed_fds,        \
-         (((events)&PICOEV_READ) != 0 ? EVFILT_READ : 0) |      \
-             (((events)&PICOEV_WRITE) != 0 ? EVFILT_WRITE : 0), \
+#define SET(op, events)                                           \
+  EV_SET(loop->changelist + cl_off++, loop->changed_fds,          \
+         (((events) & PICOEV_READ) != 0 ? EVFILT_READ : 0) |      \
+             (((events) & PICOEV_WRITE) != 0 ? EVFILT_WRITE : 0), \
          (op), 0, 0, NULL)
 
   int cl_off = 0, nevents;

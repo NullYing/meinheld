@@ -812,7 +812,7 @@ static int check_http_expect(client_t *client) {
     c = PyDict_GetItemString(req->environ, "HTTP_EXPECT");
     if (c) {
 #ifdef PY3
-      val = PyUnicode_AsUTF8(c);
+      val = (char *)PyUnicode_AsUTF8(c);
 #else
       val = PyBytes_AS_STRING(c);
 #endif
@@ -1365,7 +1365,7 @@ static int unix_listen(char *sock_name, int len) {
 
   DEBUG("unix domain socket %s", sock_name);
 
-  if (len >= sizeof(saddr.sun_path)) {
+  if ((size_t)len >= sizeof(saddr.sun_path)) {
     PyErr_SetString(PyExc_OSError, "AF_UNIX path too long");
     return -1;
   }

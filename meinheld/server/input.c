@@ -226,9 +226,7 @@ static struct PyMethodDef InputObject_methods[] = {
     {"readlines", (PyCFunction)InputObject_readlines, METH_VARARGS, ""},
     {NULL, NULL}};
 
-static PyGetSetDef file_getsetlist[] = {
-    {0},
-};
+
 
 PyTypeObject InputObjectType = {
 #ifdef PY3

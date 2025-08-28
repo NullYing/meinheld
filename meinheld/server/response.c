@@ -1,5 +1,7 @@
 #include "response.h"
 
+#include <sys/uio.h>
+
 #include "log.h"
 #include "meinheld.h"
 #include "util.h"
@@ -35,44 +37,44 @@
   "HTTP/1.1 417 Expectation Failed\r\nContent-Type: " \
   "text/html\r\nServer: " SERVER "\r\n\r\n"
 
-#define MSG_500                                                                \
-  H_MSG_500                                                                    \
-      "<html><head><title>500 Internal Server "                                \
-      "Error</title></head><body><h1>Internal Server Error</h1><p>The server " \
-      "encountered an internal error and was unable to complete your "         \
-      "request.  Either the server is overloaded or there is an error in the " \
-      "application.</p></body></html>"
+#define MSG_500                                                            \
+  H_MSG_500                                                                \
+  "<html><head><title>500 Internal Server "                                \
+  "Error</title></head><body><h1>Internal Server Error</h1><p>The server " \
+  "encountered an internal error and was unable to complete your "         \
+  "request.  Either the server is overloaded or there is an error in the " \
+  "application.</p></body></html>"
 
-#define MSG_503                                                                \
-  H_MSG_503                                                                    \
-      "<html><head><title>Service Unavailable</title></head><body><p>Service " \
-      "Unavailable.</p></body></html>"
+#define MSG_503                                                            \
+  H_MSG_503                                                                \
+  "<html><head><title>Service Unavailable</title></head><body><p>Service " \
+  "Unavailable.</p></body></html>"
 
-#define MSG_400                                                    \
-  H_MSG_400                                                        \
-      "<html><head><title>Bad Request</title></head><body><p>Bad " \
-      "Request.</p></body></html>"
+#define MSG_400                                                \
+  H_MSG_400                                                    \
+  "<html><head><title>Bad Request</title></head><body><p>Bad " \
+  "Request.</p></body></html>"
 
-#define MSG_408                                                            \
-  H_MSG_408                                                                \
-      "<html><head><title>Request Timeout</title></head><body><p>Request " \
-      "Timeout.</p></body></html>"
+#define MSG_408                                                        \
+  H_MSG_408                                                            \
+  "<html><head><title>Request Timeout</title></head><body><p>Request " \
+  "Timeout.</p></body></html>"
 
-#define MSG_411                                                           \
-  H_MSG_411                                                               \
-      "<html><head><title>Length Required</title></head><body><p>Length " \
-      "Required.</p></body></html>"
+#define MSG_411                                                       \
+  H_MSG_411                                                           \
+  "<html><head><title>Length Required</title></head><body><p>Length " \
+  "Required.</p></body></html>"
 
-#define MSG_413                                          \
-  H_MSG_413                                              \
-      "<html><head><title>Request Entity Too "           \
-      "Large</title></head><body><p>Request Entity Too " \
-      "Large.</p></body></html>"
+#define MSG_413                                      \
+  H_MSG_413                                          \
+  "<html><head><title>Request Entity Too "           \
+  "Large</title></head><body><p>Request Entity Too " \
+  "Large.</p></body></html>"
 
-#define MSG_417                         \
-  H_MSG_417                             \
-      "<html><head><title>Expectation " \
-      "Failed</title></head><body><p>Expectation Failed.</p></body></html>"
+#define MSG_417                     \
+  H_MSG_417                         \
+  "<html><head><title>Expectation " \
+  "Failed</title></head><body><p>Expectation Failed.</p></body></html>"
 
 ResponseObject *start_response = NULL;
 
@@ -290,7 +292,7 @@ static response_status writev_bucket(write_bucket *data) {
 #endif
   w = writev(data->fd, data->iov, data->iov_cnt);
   BDEBUG("writev fd:%d ret:%d total_size:%d", data->fd, (int)w, data->total);
-  Py_END_ALLOW_THREADS if (w == -1) {
+  Py_END_ALLOW_THREADS if ((ssize_t)w == -1) {
     // error
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       BDEBUG("try again later");
@@ -308,7 +310,7 @@ static response_status writev_bucket(write_bucket *data) {
     return STATUS_OK;
   } else {
     if (data->total > w) {
-      for (; i < data->iov_cnt; i++) {
+      for (; (uint32_t)i < data->iov_cnt; i++) {
         if (w > data->iov[i].iov_len) {
           // already write
           w -= data->iov[i].iov_len;
@@ -690,7 +692,6 @@ error:
 }
 
 static int write_sendfile(int out_fd, int in_fd, int offset, size_t count) {
-  int size = (int)count;
   int res;
 #ifdef linux
   /*
@@ -705,7 +706,7 @@ static int write_sendfile(int out_fd, int in_fd, int offset, size_t count) {
 
       size = info.st_size - lseek(in_fd, 0, SEEK_CUR);
   }*/
-  Py_BEGIN_ALLOW_THREADS res = sendfile(out_fd, in_fd, NULL, size);
+  Py_BEGIN_ALLOW_THREADS res = sendfile(out_fd, in_fd, NULL, (int)count);
   Py_END_ALLOW_THREADS return res;
 #elif defined(__FreeBSD__)
   off_t len;
@@ -743,7 +744,7 @@ response_status close_response(client_t *client) {
       close = PyObject_GetAttrString(client->response, "close");
 
       args = PyTuple_New(0);
-      data = PyEval_CallObject(close, args);
+      data = PyObject_CallObject(close, args);
       DEBUG("call response object close");
       Py_DECREF(args);
       Py_XDECREF(data);
@@ -1233,7 +1234,7 @@ static PyObject *FileWrapperObject_close(FileWrapperObject *self,
   method = PyObject_GetAttrString(self->filelike, "close");
 
   if (method) {
-    result = PyEval_CallObject(method, (PyObject *)NULL);
+    result = PyObject_CallObject(method, (PyObject *)NULL);
     if (!result) PyErr_Clear();
     Py_DECREF(method);
   }

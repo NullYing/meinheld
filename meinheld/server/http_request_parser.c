@@ -547,7 +547,7 @@ static int check_field_name(const char *s, size_t len) {
   int ascii = 1;
   int i;
 
-  for (i = 0; i < len; i++) {
+  for (i = 0; i < (int)len; i++) {
     if (s[i] > 127) {
       ascii = 0;
       break;
