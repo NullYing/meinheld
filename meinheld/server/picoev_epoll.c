@@ -39,10 +39,8 @@
 #define PICOEV_EPOLL_DEFER_DELETES 1
 #endif
 
-// EPOLLEXCLUSIVE was added in Linux 4.5
-// When using backported (new) kernel, kernel supports it in spite of
-// sys/epoll.h doesn't define it.
-// Kernel older than 4.5 ignores this flag.  So we can pass it safely.
+/* EPOLLEXCLUSIVE was added in Linux 4.5, but may be supported by a
+ * backported kernel even when the userspace headers do not define it. */
 #ifndef EPOLLEXCLUSIVE
 #define EPOLLEXCLUSIVE (1 << 28)
 #endif
@@ -90,15 +88,37 @@ int picoev_destroy_loop(picoev_loop* _loop) {
   return 0;
 }
 
+static int picoev_epoll_add(picoev_loop_epoll* loop, int fd,
+                            struct epoll_event* ev, int exclusive) {
+  int ret;
+  if (exclusive) {
+    ev->events |= EPOLLEXCLUSIVE;
+  }
+  ret = epoll_ctl(loop->epfd, EPOLL_CTL_ADD, fd, ev);
+  if (ret != 0 && exclusive && errno == EINVAL) {
+    /* Older kernels may reject this flag instead of ignoring it. */
+    ev->events &= ~EPOLLEXCLUSIVE;
+    ret = epoll_ctl(loop->epfd, EPOLL_CTL_ADD, fd, ev);
+  }
+  return ret;
+}
+
 int picoev_update_events_internal(picoev_loop* _loop, int fd, int events) {
   picoev_loop_epoll* loop = (picoev_loop_epoll*)_loop;
   picoev_fd* target = picoev.fds + fd;
   struct epoll_event ev;
-  int epoll_ret;
+  int old_events = target->events;
+  int new_events = events & PICOEV_READWRITE;
+  int exclusive = (events & PICOEV_ADD) != 0
+                      ? events & PICOEV_EXCLUSIVE
+                      : old_events & PICOEV_EXCLUSIVE;
 
   assert(PICOEV_FD_BELONGS_TO_LOOP(&loop->loop, fd));
 
-  if (unlikely((events & PICOEV_READWRITE) == target->events)) {
+  if (new_events != 0) {
+    new_events |= exclusive;
+  }
+  if (unlikely(new_events == old_events && (events & PICOEV_DEL) == 0)) {
     return 0;
   }
 
@@ -106,45 +126,51 @@ int picoev_update_events_internal(picoev_loop* _loop, int fd, int events) {
               ((events & PICOEV_WRITE) != 0 ? EPOLLOUT : 0);
   ev.data.fd = fd;
 
-#define SET(op, check_error)                        \
-  do {                                              \
-    epoll_ret = epoll_ctl(loop->epfd, op, fd, &ev); \
-    assert(!check_error || epoll_ret == 0);         \
-  } while (0)
-
 #if PICOEV_EPOLL_DEFER_DELETES
-
-  if ((events & PICOEV_DEL) != 0) {
-    /* nothing to do */
-  } else if ((events & PICOEV_READWRITE) == 0) {
-    SET(EPOLL_CTL_DEL, 1);
-  } else {
-    SET(EPOLL_CTL_MOD, 0);
-    if (epoll_ret != 0) {
-      assert(errno == ENOENT);
-      ev.events |= EPOLLEXCLUSIVE;
-      SET(EPOLL_CTL_ADD, 1);
-    }
+  if ((events & PICOEV_DEL) != 0 &&
+      (old_events & PICOEV_EXCLUSIVE) == 0) {
+    /* Ordinary descriptors can retain their registration for reuse. */
+    target->events = 0;
+    return 0;
   }
-
-#else
-
-  if ((events & PICOEV_READWRITE) == 0) {
-    SET(EPOLL_CTL_DEL, 1);
-  } else {
-    if (target->events == 0) {
-      ev.events |= EPOLLEXCLUSIVE;
-      SET(EPOLL_CTL_ADD, 1);
-    } else {
-      SET(EPOLL_CTL_MOD, 1);
-    }
-  }
-
 #endif
 
-#undef SET
+  if ((old_events & PICOEV_EXCLUSIVE) != 0) {
+    /* The kernel forbids MOD on an EPOLLEXCLUSIVE registration. Delete it
+     * synchronously, including before a timeout-only shutdown registration. */
+    if (epoll_ctl(loop->epfd, EPOLL_CTL_DEL, fd, &ev) != 0) {
+      return -1;
+    }
+    target->events = 0;
+    old_events = 0;
+  }
 
-  target->events = events;
+  if ((new_events & PICOEV_READWRITE) == 0) {
+    if ((old_events & PICOEV_READWRITE) != 0 &&
+        epoll_ctl(loop->epfd, EPOLL_CTL_DEL, fd, &ev) != 0) {
+      return -1;
+    }
+  } else if (exclusive) {
+    if (picoev_epoll_add(loop, fd, &ev, 1) != 0) {
+      return -1;
+    }
+  } else {
+#if !PICOEV_EPOLL_DEFER_DELETES
+    if (old_events == 0) {
+      if (picoev_epoll_add(loop, fd, &ev, 0) != 0) {
+        return -1;
+      }
+    } else
+#endif
+    {
+      if (epoll_ctl(loop->epfd, EPOLL_CTL_MOD, fd, &ev) != 0 &&
+          (errno != ENOENT || picoev_epoll_add(loop, fd, &ev, 0) != 0)) {
+        return -1;
+      }
+    }
+  }
+
+  target->events = new_events;
 
   return 0;
 }
@@ -175,7 +201,10 @@ int picoev_poll_once_internal(picoev_loop* _loop, int max_wait) {
     } else {
 #if PICOEV_EPOLL_DEFER_DELETES
       event->events = 0;
-      epoll_ctl(loop->epfd, EPOLL_CTL_DEL, event->data.fd, event);
+      if (epoll_ctl(loop->epfd, EPOLL_CTL_DEL, event->data.fd, event) != 0 &&
+          errno != ENOENT && errno != EBADF) {
+        return -1;
+      }
 #endif
     }
   }

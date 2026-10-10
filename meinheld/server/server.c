@@ -852,27 +852,63 @@ static int check_http_expect(client_t *client) {
 
 #ifdef PY3
 static int set_input_file(client_t *client) {
-  PyObject *input;
-  int fd;
+  PyObject *io = NULL, *raw = NULL, *input = NULL;
+  int fd = -1;
   request *req = client->current_req;
-
   FILE *tmp = (FILE *)req->body;
-  fflush(tmp);
-  rewind(tmp);
 
-  fd = fileno(tmp);
-  input = PyFile_FromFd(fd, "<tmpfile>", "rb", -1, NULL, NULL, NULL, 1);
-  if (input == NULL) {
-    fclose(tmp);
-    req->body = NULL;
+  if (ferror(tmp)) {
+    PyErr_SetString(PyExc_IOError, "failed to write request body to temporary file");
     return -1;
   }
-  // env["wsgi.input"] = tmpfile
-  //
-  PyDict_SetItem((PyObject *)req->environ, wsgi_input_key, input);
-  Py_DECREF(input);
+  if (fflush(tmp) != 0 || fseek(tmp, 0, SEEK_SET) != 0) {
+    goto io_error;
+  }
+
+  fd = dup(fileno(tmp));
+  if (fd == -1) {
+    goto io_error;
+  }
+  /* Python owns the duplicate; release both the FILE and its stdio buffer. */
+  if (fclose(tmp) != 0) {
+    req->body = NULL;
+    goto io_error;
+  }
   req->body = NULL;
+
+  io = PyImport_ImportModule("_io");
+  if (io == NULL) {
+    goto error;
+  }
+  /* FileIO leaves a caller-provided fd open if construction fails.  Build
+     it separately so buffered-reader failures have one clear fd owner. */
+  raw = PyObject_CallMethod(io, "FileIO", "isO", fd, "rb", Py_True);
+  if (raw == NULL) {
+    goto error;
+  }
+  fd = -1;
+  input = PyObject_CallMethod(io, "BufferedReader", "O", raw);
+  if (input == NULL) {
+    goto error;
+  }
+  if (PyDict_SetItem((PyObject *)req->environ, wsgi_input_key, input) == -1) {
+    goto error;
+  }
+  Py_DECREF(input);
+  Py_DECREF(raw);
+  Py_DECREF(io);
   return 1;
+
+io_error:
+  PyErr_SetFromErrno(PyExc_IOError);
+error:
+  Py_XDECREF(input);
+  Py_XDECREF(raw);
+  Py_XDECREF(io);
+  if (fd != -1) {
+    close(fd);
+  }
+  return -1;
 }
 
 #else
@@ -971,11 +1007,11 @@ static int prepare_call_wsgi(client_t *client) {
 
   if (req->body_type == BODY_TYPE_TMPFILE) {
     if (set_input_file(client) == -1) {
-      return -1;
+      goto input_error;
     }
   } else {
     if (set_input_object(client) == -1) {
-      return -1;
+      goto input_error;
     }
   }
   PyDict_SetItem((PyObject *)req->environ, wsgi_input_terminated_key, Py_True);
@@ -985,6 +1021,14 @@ static int prepare_call_wsgi(client_t *client) {
   }
   /* setting_keepalive(client); */
   return 1;
+
+input_error:
+  call_error_logger();
+  client->keep_alive = 0;
+  client->status_code = 500;
+  send_error_page(client);
+  close_client(client);
+  return -1;
 }
 
 static int set_read_error(client_t *client, int status_code) {
@@ -1660,8 +1704,8 @@ static int listen_all_sockets(void) {
       listen_sock = (int)PyInt_AsLong(item);
 #endif
       setup_listen_sock(listen_sock);
-      ret = picoev_add(main_loop, listen_sock, PICOEV_READ, ACCEPT_TIMEOUT_SECS,
-                       accept_callback, NULL);
+      ret = picoev_add(main_loop, listen_sock, PICOEV_READ | PICOEV_EXCLUSIVE,
+                       ACCEPT_TIMEOUT_SECS, accept_callback, NULL);
       if (ret == 0) {
         activecnt++;
       }

@@ -233,6 +233,7 @@ static void free_write_bucket(write_bucket *bucket) {
   GDEBUG("free %p", bucket);
   Py_CLEAR(bucket->temp1);
   Py_CLEAR(bucket->chunk_data);
+  Py_CLEAR(bucket->body_data);
   PyMem_Free(bucket->iov);
   PyMem_Free(bucket);
 }
@@ -281,54 +282,58 @@ static void writev_log(write_bucket *data) {
 #endif
 
 static response_status writev_bucket(write_bucket *data) {
+  ssize_t written;
   size_t w;
-  int i = 0;
-  Py_BEGIN_ALLOW_THREADS
+  int saved_errno;
+  uint32_t i;
+  while (data->total > 0) {
+    Py_BEGIN_ALLOW_THREADS
 #ifdef DEVELOP
-      BDEBUG("\nwritev_bucket fd:%d", data->fd);
-  printf("\x1B[34m");
-  writev_log(data);
-  printf("\x1B[0m\n");
+    BDEBUG("\nwritev_bucket fd:%d", data->fd);
+    printf("\x1B[34m");
+    writev_log(data);
+    printf("\x1B[0m\n");
 #endif
-  w = writev(data->fd, data->iov, data->iov_cnt);
-  BDEBUG("writev fd:%d ret:%d total_size:%d", data->fd, (int)w, data->total);
-  Py_END_ALLOW_THREADS if ((ssize_t)w == -1) {
-    // error
-    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-      BDEBUG("try again later");
-      return STATUS_SUSPEND;
-    } else {
-      // ERROR
+    written = writev(data->fd, data->iov, data->iov_cnt);
+    saved_errno = errno;
+    BDEBUG("writev fd:%d ret:%zd total_size:%d", data->fd, written, data->total);
+    Py_END_ALLOW_THREADS
+    errno = saved_errno;
+    if (written == -1) {
+      if (errno == EINTR) {
+        continue;
+      }
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        BDEBUG("try again later");
+        return STATUS_SUSPEND;
+      }
       PyErr_SetFromErrno(PyExc_IOError);
-      /* write_error_log(__FILE__, __LINE__); */
       call_error_logger();
       return STATUS_ERROR;
     }
-  }
-  if (w == 0) {
-    data->sended = 1;
-    return STATUS_OK;
-  } else {
-    if (data->total > w) {
-      for (; (uint32_t)i < data->iov_cnt; i++) {
-        if (w > data->iov[i].iov_len) {
-          // already write
-          w -= data->iov[i].iov_len;
-          data->iov[i].iov_len = 0;
-        } else {
-          data->iov[i].iov_base += w;
-          data->iov[i].iov_len = data->iov[i].iov_len - w;
-          break;
-        }
-      }
-      data->total = data->total - w;
-      BDEBUG("writev_bucket write %d progress %d/%d", (int)w, data->total,
-             data->total_size);
-      // resume
-      // again later
-      return writev_bucket(data);
+    if (written == 0) {
+      PyErr_SetString(PyExc_IOError, "response write made no progress");
+      call_error_logger();
+      return STATUS_ERROR;
     }
-    data->sended = 1;
+    /* Preserve the syscall's byte count before consuming individual iovecs. */
+    data->total -= (uint32_t)written;
+    if (data->total == 0) {
+      break;
+    }
+    w = (size_t)written;
+    for (i = 0; i < data->iov_cnt; i++) {
+      if (w >= data->iov[i].iov_len) {
+        w -= data->iov[i].iov_len;
+        data->iov[i].iov_len = 0;
+      } else {
+        data->iov[i].iov_base = (char *)data->iov[i].iov_base + w;
+        data->iov[i].iov_len -= w;
+        break;
+      }
+    }
+    BDEBUG("writev_bucket write %zd progress %d/%d", written, data->total,
+           data->total_size);
   }
   data->sended = 1;
   return STATUS_OK;
@@ -337,11 +342,13 @@ static response_status writev_bucket(write_bucket *data) {
 static int set_file_content_length(client_t *client, write_bucket *bucket) {
   struct stat info;
   int in_fd, ret = 0;
-  size_t size = 0;
+  off_t offset;
+  uint64_t size = 0;
   Py_ssize_t valuelen = 0;
   FileWrapperObject *filewrap = NULL;
   PyObject *filelike = NULL, *length = NULL;
   char *value = NULL;
+  char length_value[32];
 
   filewrap = (FileWrapperObject *)client->response;
   filelike = filewrap->filelike;
@@ -355,12 +362,18 @@ static int set_file_content_length(client_t *client, write_bucket *bucket) {
     PyErr_SetFromErrno(PyExc_IOError);
     return -1;
   }
+  offset = lseek(in_fd, 0, SEEK_CUR);
+  if (offset == (off_t)-1) {
+    PyErr_SetFromErrno(PyExc_IOError);
+    return -1;
+  }
 
-  size = info.st_size;
+  size = info.st_size > offset ? (uint64_t)(info.st_size - offset) : 0;
   client->content_length_set = 1;
   client->content_length = size;
   DEBUG("set content length:%" PRIu64, size);
-  length = PyBytes_FromFormat("%zu", size);
+  snprintf(length_value, sizeof(length_value), "%" PRIu64, size);
+  length = PyBytes_FromString(length_value);
   if (length == NULL) {
     return -1;
   }
@@ -369,10 +382,10 @@ static int set_file_content_length(client_t *client, write_bucket *bucket) {
 
   add_header(bucket, "Content-Length", 14, value, valuelen);
   ret = PyList_Append(bucket->temp1, length);
+  Py_DECREF(length);
   if (ret == -1) {
     return -1;
   }
-  Py_DECREF(length);
   return 1;
 }
 
@@ -456,13 +469,15 @@ static int add_all_headers(write_bucket *bucket, PyObject *fast_headers,
         goto error;
       }
       bytes1 = wsgi_to_bytes(obj1);
-      if (unlikely(PyBytes_AsStringAndSize(bytes1, &name, &namelen) == -1)) {
+      if (unlikely(!bytes1 ||
+                   PyBytes_AsStringAndSize(bytes1, &name, &namelen) == -1)) {
         goto error;
       }
 
       // value
       bytes2 = wsgi_to_bytes(obj2);
-      if (unlikely(PyBytes_AsStringAndSize(bytes2, &value, &valuelen) == -1)) {
+      if (unlikely(!bytes2 ||
+                   PyBytes_AsStringAndSize(bytes2, &value, &valuelen) == -1)) {
         goto error;
       }
 
@@ -483,6 +498,8 @@ static int add_all_headers(write_bucket *bucket, PyObject *fast_headers,
       }
 
       if (!strcasecmp(name, "Server") || !strcasecmp(name, "Date")) {
+        Py_CLEAR(bytes1);
+        Py_CLEAR(bytes2);
         continue;
       }
 
@@ -516,8 +533,8 @@ static int add_all_headers(write_bucket *bucket, PyObject *fast_headers,
         goto error;
       }
 #endif
-      Py_XDECREF(bytes1);
-      Py_XDECREF(bytes2);
+      Py_CLEAR(bytes1);
+      Py_CLEAR(bytes2);
     }
 
   } else {
@@ -569,6 +586,7 @@ static PyObject *get_chunk_data(size_t datalen) {
 static void set_first_body_data(client_t *client, char *data, size_t datalen) {
   write_bucket *bucket = client->bucket;
   if (data) {
+    bucket->body_size = datalen;
     if (client->chunked_response) {
       char *lendata = NULL;
       Py_ssize_t len = 0;
@@ -621,6 +639,7 @@ static response_status write_headers(client_t *client, char *data,
   if (bucket == NULL) {
     goto error;
   }
+  bucket->is_header = 1;
   templist = PyList_New(hlen * 4);
   if (templist == NULL) {
     goto error;
@@ -691,44 +710,38 @@ error:
   return STATUS_ERROR;
 }
 
-static int write_sendfile(int out_fd, int in_fd, int offset, size_t count) {
-  int res;
+static ssize_t write_sendfile(int out_fd, int in_fd, off_t offset,
+                              size_t count) {
+  ssize_t res;
+  int saved_errno;
 #ifdef linux
-  /*
-  if (size == 0) {
-      struct stat info;
-      DEBUG("call fstat");
-      if (fstat(in_fd, &info) == -1){
-          PyErr_SetFromErrno(PyExc_IOError);
-          write_error_log(__FILE__, __LINE__);
-          return -1;
-      }
-
-      size = info.st_size - lseek(in_fd, 0, SEEK_CUR);
-  }*/
-  Py_BEGIN_ALLOW_THREADS res = sendfile(out_fd, in_fd, NULL, (int)count);
-  Py_END_ALLOW_THREADS return res;
+  /* NULL preserves the file descriptor's current position. */
+  Py_BEGIN_ALLOW_THREADS
+  res = sendfile(out_fd, in_fd, NULL, count);
+  saved_errno = errno;
+  Py_END_ALLOW_THREADS
+  errno = saved_errno;
+  return res;
 #elif defined(__FreeBSD__)
-  off_t len;
-  Py_BEGIN_ALLOW_THREADS res =
-      sendfile(in_fd, out_fd, offset, 0, NULL, &len, 0);
-  Py_END_ALLOW_THREADS if (res == 0) { return len; }
-  else {
-    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-      return len;
-    }
-    return -1;
-  }
+  off_t len = 0;
+  Py_BEGIN_ALLOW_THREADS
+  res = sendfile(in_fd, out_fd, offset, count, NULL, &len, 0);
+  saved_errno = errno;
+  Py_END_ALLOW_THREADS
 #elif defined(__APPLE__)
-  off_t len;
-  Py_BEGIN_ALLOW_THREADS res = sendfile(in_fd, out_fd, offset, &len, NULL, 0);
-  Py_END_ALLOW_THREADS if (res == 0) { return len; }
-  else {
-    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-      return len;
-    }
-    return -1;
+  off_t len = (off_t)count;
+  Py_BEGIN_ALLOW_THREADS
+  res = sendfile(in_fd, out_fd, offset, &len, NULL, 0);
+  saved_errno = errno;
+  Py_END_ALLOW_THREADS
+#endif
+#if defined(__FreeBSD__) || defined(__APPLE__)
+  errno = saved_errno;
+  if (res == 0 ||
+      (len > 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))) {
+    return (ssize_t)len;
   }
+  return -1;
 #endif
 }
 
@@ -758,43 +771,74 @@ response_status close_response(client_t *client) {
 static response_status process_sendfile(client_t *client) {
   PyObject *filelike = NULL;
   FileWrapperObject *filewrap = NULL;
-  int in_fd, ret;
+  int in_fd;
+  ssize_t ret;
+  off_t offset = 0;
+  uint64_t remaining;
+  size_t count;
+  PyObject *error_type = NULL, *error_value = NULL, *error_traceback = NULL;
 
   filewrap = (FileWrapperObject *)client->response;
   filelike = filewrap->filelike;
 
   in_fd = PyObject_AsFileDescriptor(filelike);
   if (in_fd == -1) {
-    PyErr_Clear();
-    return STATUS_OK;
+    goto error;
   }
 
   while (client->content_length > client->write_bytes) {
-    ret = write_sendfile(client->fd, in_fd, client->write_bytes,
-                         client->content_length);
-    DEBUG("process_sendfile send %d", ret);
+#if defined(__FreeBSD__) || defined(__APPLE__)
+    offset = lseek(in_fd, 0, SEEK_CUR);
+    if (offset == (off_t)-1) {
+      PyErr_SetFromErrno(PyExc_IOError);
+      goto error;
+    }
+#endif
+    remaining = client->content_length - client->write_bytes;
+    /* Linux limits sendfile to this size; also fits a signed return value. */
+    count = remaining > 0x7ffff000 ? 0x7ffff000 : (size_t)remaining;
+    ret = write_sendfile(client->fd, in_fd, offset, count);
+    DEBUG("process_sendfile send %zd", ret);
     switch (ret) {
       case 0:
-        break;
+        PyErr_SetString(PyExc_IOError,
+                        "file ended before the declared Content-Length");
+        goto error;
       case -1:                                         /* error */
+        if (errno == EINTR) {
+          continue;
+        }
         if (errno == EAGAIN || errno == EWOULDBLOCK) { /* try again later */
           // next
-          DEBUG("process_sendfile EAGAIN %d", ret);
+          DEBUG("process_sendfile EAGAIN %zd", ret);
           return STATUS_SUSPEND;
         } else { /* fatal error */
-          client->keep_alive = 0;
-          /* client->bad_request_code = 500; */
-          client->status_code = 500;
-          // close
-          return STATUS_ERROR;
+          PyErr_SetFromErrno(PyExc_IOError);
+          goto error;
         }
       default:
         client->write_bytes += ret;
+#if defined(__FreeBSD__) || defined(__APPLE__)
+        /* These sendfile variants do not update the descriptor position. */
+        if (lseek(in_fd, offset + ret, SEEK_SET) == (off_t)-1) {
+          PyErr_SetFromErrno(PyExc_IOError);
+          goto error;
+        }
+#endif
     }
   }
   // all send
   // disable_cork(client);
   return close_response(client);
+error:
+  client->keep_alive = 0;
+  client->status_code = 500;
+  /* Python close callbacks need a clear exception state to run. */
+  PyErr_Fetch(&error_type, &error_value, &error_traceback);
+  close_response(client);
+  PyErr_Clear();
+  PyErr_Restore(error_type, error_value, error_traceback);
+  return STATUS_ERROR;
 }
 
 static response_status process_write(client_t *client) {
@@ -840,10 +884,14 @@ static response_status process_write(client_t *client) {
           set2bucket(bucket, buf, buflen);
         }
         bucket->temp1 = item;
+        bucket->body_size = buflen;
         ret = writev_bucket(bucket);
         if (ret != STATUS_OK) {
-          client->bucket = bucket;
-          /* Py_DECREF(item); */
+          if (ret == STATUS_SUSPEND) {
+            client->bucket = bucket;
+          } else {
+            free_write_bucket(bucket);
+          }
           return ret;
         }
 
@@ -884,8 +932,16 @@ static response_status process_write(client_t *client) {
         return STATUS_ERROR;
       }
       set_last_chunked_data(bucket);
-      writev_bucket(bucket);
+      bucket->is_last_chunk = 1;
+      ret = writev_bucket(bucket);
+      if (ret == STATUS_SUSPEND) {
+        client->bucket = bucket;
+        return ret;
+      }
       free_write_bucket(bucket);
+      if (ret == STATUS_ERROR) {
+        return ret;
+      }
     }
     return close_response(client);
   }
@@ -901,9 +957,18 @@ response_status process_body(client_t *client) {
     ret = writev_bucket(bucket);
 
     if (ret == STATUS_OK) {
-      client->write_bytes += bucket->total_size;
+      int is_last_chunk = bucket->is_last_chunk;
+      client->write_bytes += bucket->body_size;
+      if (bucket->is_header) {
+        client->header_done = 1;
+      }
       free_write_bucket(bucket);
       client->bucket = NULL;
+      if (is_last_chunk ||
+          (client->content_length_set &&
+           client->write_bytes >= client->content_length)) {
+        return close_response(client);
+      }
     } else if (ret == STATUS_ERROR) {
       free_write_bucket(bucket);
       client->bucket = NULL;
@@ -926,32 +991,18 @@ response_status process_body(client_t *client) {
 static response_status start_response_file(client_t *client) {
   PyObject *filelike;
   FileWrapperObject *filewrap;
-  int ret, in_fd, size;
-  struct stat info;
+  int in_fd;
 
   filewrap = (FileWrapperObject *)client->response;
   filelike = filewrap->filelike;
 
   in_fd = PyObject_AsFileDescriptor(filelike);
   if (in_fd == -1) {
-    PyErr_Clear();
     DEBUG("can't get fd");
     return STATUS_ERROR;
   }
-  ret = write_headers(client, NULL, 0, 1);
-  if (!client->content_length_set) {
-    if (fstat(in_fd, &info) == -1) {
-      PyErr_SetFromErrno(PyExc_IOError);
-      /* write_error_log(__FILE__, __LINE__);  */
-      call_error_logger();
-      return STATUS_ERROR;
-    }
-
-    size = info.st_size;
-    client->content_length_set = 1;
-    client->content_length = size;
-  }
-  return ret;
+  /* write_headers calculates a missing length from the current file offset. */
+  return write_headers(client, NULL, 0, 1);
 }
 
 static response_status start_response_write(client_t *client) {
@@ -979,8 +1030,11 @@ static response_status start_response_write(client_t *client) {
     /* DEBUG("status_code %d body:%.*s", client->status_code, (int)buflen, buf);
      */
     ret = write_headers(client, buf, buflen, 0);
-    // TODO when ret == STATUS_SUSPEND keep item
-    Py_DECREF(item);
+    if (ret == STATUS_SUSPEND) {
+      ((write_bucket *)client->bucket)->body_data = item;
+    } else {
+      Py_DECREF(item);
+    }
     return ret;
   } else {
     if (item == NULL && !PyErr_Occurred()) {

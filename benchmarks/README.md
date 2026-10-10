@@ -48,13 +48,20 @@ report five CPU-time samples and their median.
 Run the focused regression suite after building the extension:
 
 ```sh
-PYTHONPATH=tests python -m unittest -v test_worker_lifecycle test_request_headers test_wsgi_optimizations test_access_format
+PYTHONPATH=tests python -m unittest -v \
+  test_worker_lifecycle test_request_headers test_wsgi_optimizations \
+  test_access_format test_performance_regressions test_epoll_backend
 ```
 
 The suite covers request/log lifetimes, Gunicorn recycling and concurrent streaming,
 cooperative switching, environment isolation, callable applications, exception and
 close callbacks, fragmented/duplicate headers, Latin-1, limits, partial disconnects,
-memory and temporary-file upload bodies, and access-log formatting.
+memory and temporary-file upload bodies, and access-log formatting. The performance
+regressions also cover backpressured responses, sendfile EOF and remaining length,
+upload stream lifetimes, bounded readline scans, and ignored response headers.
+The Linux epoll checks compile a native helper with assertions disabled and exercise
+both immediate and deferred deletion modes; they require a C compiler and Python
+development headers.
 
 For deployment decisions, repeat HTTP tests on Linux/Python 3.12 with the actual
 Gunicorn configuration and representative application routes, including database

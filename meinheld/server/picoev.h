@@ -68,6 +68,8 @@ extern "C" {
 #define PICOEV_READ 1
 #define PICOEV_WRITE 2
 #define PICOEV_TIMEOUT 4
+/* Listener-only hint for picoev_add; ignored by backends without support. */
+#define PICOEV_EXCLUSIVE 8
 #define PICOEV_ADD 0x40000000
 #define PICOEV_DEL 0x20000000
 #define PICOEV_READWRITE (PICOEV_READ | PICOEV_WRITE)

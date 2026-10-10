@@ -100,37 +100,30 @@ static PyObject *InputObject_read(InputObject *self, PyObject *args) {
   return s;
 }
 
-static int inner_readline(InputObject *self, char **output) {
-  char *start, *end;
-  Py_ssize_t l = 0;
+static Py_ssize_t inner_readline(InputObject *self, Py_ssize_t size,
+                                char **output) {
+  char *start = self->buffer->buf + self->pos;
+  char *newline;
+  Py_ssize_t l = (Py_ssize_t)self->buffer->len - self->pos;
 
-  start = self->buffer->buf + self->pos;
-  end = self->buffer->buf + self->buffer->len;
-
-  while (start < end) {
-    if (*start == '\n') {
-      break;
-    }
-    start++;
-    l++;
+  if (size >= 0 && size < l) {
+    l = size;
   }
-
-  if (start < end) {
-    start++;
-    l++;
+  newline = memchr(start, '\n', (size_t)l);
+  if (newline != NULL) {
+    l = newline - start + 1;
   }
-  // seek current pos
-  *output = self->buffer->buf + self->pos;
+  *output = start;
   self->pos += l;
-  return (int)l;
+  return l;
 }
 
 static PyObject *InputObject_readline(InputObject *self, PyObject *args) {
-  int len, size = -1, delta;
+  Py_ssize_t len, size = -1;
   char *output;
 
   if (args) {
-    if (!PyArg_ParseTuple(args, "|i:readline", &size)) {
+    if (!PyArg_ParseTuple(args, "|n:readline", &size)) {
       return NULL;
     }
   }
@@ -138,25 +131,17 @@ static PyObject *InputObject_readline(InputObject *self, PyObject *args) {
     return NULL;
   }
 
-  if ((len = inner_readline(self, &output)) < 0) {
-    return NULL;
-  }
-  if (size >= 0 && size < len) {
-    delta = len - size;
-    len -= delta;
-    // back
-    self->pos -= delta;
-  }
+  len = inner_readline(self, size, &output);
   return PyBytes_FromStringAndSize(output, len);
 }
 
 static PyObject *InputObject_readlines(InputObject *self, PyObject *args) {
-  int len;
+  Py_ssize_t len;
   char *output;
   PyObject *result, *new_line;
-  int sizehint = 0, length = 0;
+  Py_ssize_t sizehint = 0, length = 0;
 
-  if (!PyArg_ParseTuple(args, "|i:readlines", &sizehint)) {
+  if (!PyArg_ParseTuple(args, "|n:readlines", &sizehint)) {
     return NULL;
   }
   if (is_close(self)) {
@@ -169,9 +154,7 @@ static PyObject *InputObject_readlines(InputObject *self, PyObject *args) {
   }
 
   while (1) {
-    if ((len = inner_readline(self, &output)) < 0) {
-      goto err;
-    }
+    len = inner_readline(self, -1, &output);
     if (len == 0) {
       break;
     }

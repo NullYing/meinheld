@@ -14,9 +14,13 @@ typedef struct {
   uint32_t iov_size;
   uint32_t total;
   uint32_t total_size;
+  size_t body_size;
   uint8_t sended;
+  uint8_t is_header;
+  uint8_t is_last_chunk;
   PyObject *temp1;       // keep origin pointer
   PyObject *chunk_data;  // keep chunk_data origin pointer
+  PyObject *body_data;   // keep first body item while headers are pending
 } write_bucket;
 
 typedef struct {
