@@ -31,6 +31,53 @@ class SafeAtoms(dict):
         else:
             return '-'
 
+class AccessAtoms(dict):
+    """Build and escape only fields requested by the access-log format.
+
+    Values belong to one request. No request headers are cached globally.
+    """
+
+    _fields = {
+        "h": "REMOTE_ADDR", "f": "HTTP_REFERER", "a": "HTTP_USER_AGENT",
+    }
+    _numbers = {"s": "STATUS_CODE", "b": "SEND_BYTES", "D": "REQUEST_TIME"}
+
+    def __init__(self, environ, bracket_time=False):
+        super().__init__()
+        self.environ = environ
+        self.bracket_time = bracket_time
+
+    def __missing__(self, key):
+        env = self.environ
+        if key in self._fields:
+            value = env.get(self._fields[key], "-")
+        elif key in self._numbers:
+            default = 1 if key == "D" else "-"
+            value = str(env.get(self._numbers[key], default))
+        elif key in ("l", "u"):
+            value = "-"
+        elif key == "t":
+            value = env.get("LOCAL_TIME", "-")
+            if self.bracket_time:
+                value = "[%s]" % value
+        elif key == "r":
+            value = "%s %s %s" % (
+                env.get("REQUEST_METHOD", "-"), env.get("PATH_INFO", "-"),
+                env.get("SERVER_PROTOCOL", "HTTP/1.0"),
+            )
+        elif key == "T":
+            value = str(env.get("REQUEST_TIME", 1) / 100)
+        elif key == "p":
+            value = "<%s>" % os.getpid()
+        elif key.startswith("{") and key.lower().endswith("}i"):
+            value = env.get("HTTP_" + key[1:-2].upper(), "-")
+        else:
+            value = "-"
+        value = value.replace('"', '\\"')
+        self[key] = value
+        return value
+
+
 class Logger(object):
 
     LOG_LEVELS = {
@@ -85,50 +132,13 @@ class Logger(object):
         self.error_log.log(lvl, msg, *args, **kwargs)
 
     def access(self, environ):
-        """ Seee http://httpd.apache.org/docs/2.0/logs.html#combined
-        for format details
-        """
-
-        # status = resp.status.split(None, 1)[0]
-        atoms = {
-                'h': environ.get('REMOTE_ADDR', '-'),
-                'l': '-',
-                'u': '-', # would be cool to get username from basic auth header
-                't': environ.get('LOCAL_TIME', '-'),
-                'r': "%s %s %s" % (environ.get('REQUEST_METHOD', '-'), environ.get('PATH_INFO', '-'), environ.get('SERVER_PROTOCOL', 'HTTP/1.0')),
-                's': str(environ.get('STATUS_CODE', '-')),
-                'b': str(environ.get('SEND_BYTES', '-')),
-                'f': environ.get('HTTP_REFERER', '-'),
-                'a': environ.get('HTTP_USER_AGENT', '-'),
-                'T': str(environ.get('REQUEST_TIME', 1) /100),
-                'D': str(environ.get('REQUEST_TIME', 1)),
-                'p': "<%s>" % os.getpid()
-                }
-        # add request headers
-        
-        for k, v in environ.items():
-            if k.startswith('HTTP_'):
-                #header
-                header = "{%s}i" % k[5:].lower()
-                atoms[header] = v
-
-        # atoms.update(dict([("{%s}i" % k.lower(),v) for k, v in req_headers]))
-
-        # # add response headers
-        # atoms.update(dict([("{%s}o" % k.lower(),v) for k, v in resp.headers]))
-
-        # # wrap atoms:
-        # # - make sure atoms will be test case insensitively
-        # # - if atom doesn't exist replace it by '-'
-        
-        safe_atoms = SafeAtoms(atoms)
-
+        if not self.access_log.isEnabledFor(logging.INFO):
+            return
         try:
-            # self.access_log.info(self.access_log_format % safe_atoms)
-            self.access_log.info(self.access_log_format % safe_atoms)
-        except:
+            atoms = AccessAtoms(environ)
+            self.access_log.info(self.access_log_format % atoms)
+        except Exception:
             self.error(*sys.exc_info())
-
 
     def reopen_files(self):
         for log in (self.error_log, self.access_log):
@@ -174,48 +184,12 @@ def _error(self, *args, **kwargs):
     self.error_log.error(*args, **kwargs)
 
 def _access(self, environ):
-    """ Seee http://httpd.apache.org/docs/2.0/logs.html#combined
-    for format details
-    """
-
-    # status = resp.status.split(None, 1)[0]
-    atoms = {
-            'h': environ.get('REMOTE_ADDR', '-'),
-            'l': '-',
-            'u': '-', # would be cool to get username from basic auth header
-            't': "[%s]" % environ.get('LOCAL_TIME', '-'),
-            'r': "%s %s %s" % (environ.get('REQUEST_METHOD', '-'), environ.get('PATH_INFO', '-'), environ.get('SERVER_PROTOCOL', 'HTTP/1.0')),
-            's': str(environ.get('STATUS_CODE', '-')),
-            'b': str(environ.get('SEND_BYTES', '-')),
-            'f': environ.get('HTTP_REFERER', '-'),
-            'a': environ.get('HTTP_USER_AGENT', '-'),
-            'T': str(environ.get('REQUEST_TIME', 1) /100),
-            'D': str(environ.get('REQUEST_TIME', 1)),
-            'p': "<%s>" % os.getpid()
-            }
-    # add request headers
-    
-    for k, v in environ.items():
-        if k.startswith('HTTP_'):
-            #header
-            header = "{%s}i" % k[5:].lower()
-            atoms[header] = v
-
-    # atoms.update(dict([("{%s}i" % k.lower(),v) for k, v in req_headers]))
-
-    # # add response headers
-    # atoms.update(dict([("{%s}o" % k.lower(),v) for k, v in resp.headers]))
-
-    # # wrap atoms:
-    # # - make sure atoms will be test case insensitively
-    # # - if atom doesn't exist replace it by '-'
-    
-    safe_atoms = SafeAtoms(atoms)
-
+    if not self.access_log.isEnabledFor(logging.INFO):
+        return
     try:
-        msg = self.cfg.access_log_format % safe_atoms
-        self.access_log.info(msg)
-    except:
+        atoms = AccessAtoms(environ, bracket_time=True)
+        self.access_log.info(self.cfg.access_log_format % atoms)
+    except Exception:
         self.error(*sys.exc_info())
 
 logger = Logger()

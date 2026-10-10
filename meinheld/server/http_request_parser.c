@@ -67,6 +67,7 @@ const static int prefix_len = 5; /* "HTTP_" */
 
 static PyObject *empty_string;
 static PyObject *separator_string;
+static PyObject *base_environ;
 
 static PyObject *version_key;
 static PyObject *version_val;
@@ -130,15 +131,6 @@ static PyObject *http_method_merge;
 static http_parser *http_parser_free_list[MAXFREELIST];
 static int numfree = 0;
 
-void parser_list_fill(void) {
-  http_parser *p;
-
-  while (numfree < MAXFREELIST) {
-    p = (http_parser *)PyMem_Malloc(sizeof(http_parser));
-    http_parser_free_list[numfree++] = p;
-  }
-}
-
 void parser_list_clear(void) {
   http_parser *p;
 
@@ -157,6 +149,10 @@ static http_parser *alloc_parser(void) {
     p = (http_parser *)PyMem_Malloc(sizeof(http_parser));
     GDEBUG("alloc %p", p);
   }
+  if (p == NULL) {
+    PyErr_NoMemory();
+    return NULL;
+  }
   memset(p, 0, sizeof(http_parser));
   return p;
 }
@@ -173,26 +169,35 @@ void dealloc_parser(http_parser *p) {
 PyObject *new_environ(client_t *client) {
   PyObject *object, *environ;
 
-  environ = PyDict_New();
-  PyDict_SetItem(environ, version_key, version_val);
-  PyDict_SetItem(environ, scheme_key, scheme_val);
-  PyDict_SetItem(environ, errors_key, errors_val);
-  PyDict_SetItem(environ, multithread_key, multithread_val);
-  PyDict_SetItem(environ, multiprocess_key, multiprocess_val);
-  PyDict_SetItem(environ, run_once_key, run_once_val);
-  PyDict_SetItem(environ, script_key, empty_string);
-  PyDict_SetItem(environ, server_name_key, server_name_val);
-  PyDict_SetItem(environ, server_port_key, server_port_val);
-  PyDict_SetItem(environ, file_wrapper_key, file_wrapper_val);
+  environ = PyDict_Copy(base_environ);
+  if (environ == NULL) {
+    return NULL;
+  }
 
   object = NATIVE_FROMSTRING(client->remote_addr);
-  PyDict_SetItem(environ, remote_addr_key, object);
+  if (object == NULL) {
+    goto error;
+  }
+  int ret = PyDict_SetItem(environ, remote_addr_key, object);
   Py_DECREF(object);
+  if (ret < 0) {
+    goto error;
+  }
 
   object = NATIVE_FROMFORMAT("%d", client->remote_port);
-  PyDict_SetItem(environ, remote_port_key, object);
+  if (object == NULL) {
+    goto error;
+  }
+  ret = PyDict_SetItem(environ, remote_port_key, object);
   Py_DECREF(object);
+  if (ret < 0) {
+    goto error;
+  }
   return environ;
+
+error:
+  Py_DECREF(environ);
+  return NULL;
 }
 
 static int hex2int(int i) {
@@ -222,42 +227,6 @@ static int urldecode(char *buf, int len) {
   }
   *t = 0;
   return t - s0;
-}
-
-static PyObject *concat_bytes(PyObject *o, const char *buf, size_t len) {
-  PyObject *ret;
-  size_t l;
-  char *dest, *origin;
-
-  l = PyBytes_GET_SIZE(o);
-
-  ret = PyBytes_FromStringAndSize((char *)0, l + len);
-  if (ret == NULL) {
-    Py_DECREF(o);
-    return ret;
-  }
-  dest = PyBytes_AS_STRING(ret);
-  origin = PyBytes_AS_STRING(o);
-  memcpy(dest, origin, l);
-  memcpy(dest + l, buf, len);
-  Py_DECREF(o);
-  return ret;
-}
-
-static PyObject *concat_string(PyObject *o, const char *buf, size_t len) {
-#ifdef PY3
-  assert(PyUnicode_CheckExact(o));
-  PyObject *tail = PyUnicode_DecodeLatin1(buf, len, NULL);
-  if (tail == NULL) {
-    return NULL;
-  }
-  PyObject *c = PyUnicode_Concat(o, tail);
-  Py_DECREF(o);
-  Py_DECREF(tail);
-  return c;
-#else
-  return concat_bytes(o, buf, len);
-#endif
 }
 
 static int replace_env_key(PyObject *dict, PyObject *old_key,
@@ -474,6 +443,11 @@ static int message_begin_cb(http_parser *p) {
   req->start_msec = current_msec;
   client->current_req = req;
   environ = new_environ(client);
+  if (environ == NULL) {
+    client->current_req = NULL;
+    free_request(req);
+    return -1;
+  }
   client->complete = 0;
   /* client->bad_request_code = 0; */
   /* client->body_type = BODY_TYPE_NONE; */
@@ -485,14 +459,14 @@ static int message_begin_cb(http_parser *p) {
 }
 
 static int add_header(request *req) {
-  assert(req->field && req->value);
+  assert(req->field && (req->value || req->value_buf));
   PyObject *env = req->environ;
   int ret = -1;
 
 #ifdef PY3
-  // TODO: error check
-  char *c2 = PyBytes_AS_STRING(req->value);
-  PyObject *v = PyUnicode_DecodeLatin1(c2, strlen(c2), NULL);
+  const char *data = req->value_buf ? req->value_buf->buf : PyBytes_AS_STRING(req->value);
+  Py_ssize_t length = req->value_buf ? req->value_buf->len : PyBytes_GET_SIZE(req->value);
+  PyObject *v = PyUnicode_DecodeLatin1(data, length, NULL);
   if (v == NULL) {
     goto end;
   }
@@ -529,10 +503,12 @@ static int add_header(request *req) {
 #endif
 
 end:
-  Py_DECREF(req->field);
-  Py_DECREF(req->value);
-  req->field = NULL;
-  req->value = NULL;
+  Py_CLEAR(req->field);
+  Py_CLEAR(req->value);
+  if (req->value_buf) {
+    free_buffer(req->value_buf);
+    req->value_buf = NULL;
+  }
   if (likely(ret == 0)) {
     req->num_headers++;
   }
@@ -548,7 +524,7 @@ static int check_field_name(const char *s, size_t len) {
   int i;
 
   for (i = 0; i < (int)len; i++) {
-    if (s[i] > 127) {
+    if ((unsigned char)s[i] > 127) {
       ascii = 0;
       break;
     }
@@ -575,51 +551,71 @@ static int header_field_cb(http_parser *p, const char *buf, size_t len) {
     return -1;
   }
 
-  if (likely(req->field == NULL)) {
-    obj = get_http_header_key(buf, len);
-  } else {
-    char temp[len];
-    key_upper(temp, buf, len);
-    obj = concat_string(req->field, temp, len);
-  }
-
-  if (unlikely(obj == NULL)) {
-    req->bad_request_code = 500;
-    return -1;
-  }
-  if (unlikely(PyBytes_GET_SIZE(obj) > LIMIT_REQUEST_FIELD_SIZE)) {
+  size_t size = req->field_buf ? req->field_buf->len :
+      (req->field ? PyUnicode_GET_LENGTH(req->field) : prefix_len);
+  if (len > LIMIT_REQUEST_FIELD_SIZE - size) {
     req->bad_request_code = 400;
     return -1;
   }
-
-  req->field = obj;
+  if (req->field == NULL && req->field_buf == NULL) {
+    obj = get_http_header_key(buf, len);
+    if (obj == NULL) goto memory_error;
+    req->field = obj;
+  } else {
+    if (req->field_buf == NULL) {
+      req->field_buf = new_buffer(size + len + 1, LIMIT_REQUEST_FIELD_SIZE);
+      if (req->field_buf == NULL) goto memory_error;
+      if (write2buf(req->field_buf, (const char *)PyUnicode_1BYTE_DATA(req->field), size) != WRITE_OK) {
+        goto memory_error;
+      }
+      Py_CLEAR(req->field);
+    }
+    size_t offset = req->field_buf->len;
+    if (write2buf(req->field_buf, buf, len) != WRITE_OK) goto memory_error;
+    key_upper(req->field_buf->buf + offset, buf, len);
+  }
   req->last_header_element = FIELD;
   return 0;
+
+memory_error:
+  req->bad_request_code = 500;
+  return -1;
 }
 
 static int header_value_cb(http_parser *p, const char *buf, size_t len) {
   request *req = get_current_request(p);
-  PyObject *obj;
-
-  /* DEBUG("field value:%.*s", (int)len, buf); */
-  if (likely(req->value == NULL)) {
-    obj = PyBytes_FromStringAndSize(buf, len);
-  } else {
-    obj = concat_bytes(req->value, buf, len);
+  if (req->field_buf) {
+    req->field = PyUnicode_DecodeASCII(req->field_buf->buf, req->field_buf->len, NULL);
+    if (req->field == NULL) goto memory_error;
+    free_buffer(req->field_buf);
+    req->field_buf = NULL;
   }
-
-  if (unlikely(obj == NULL)) {
-    req->bad_request_code = 500;
-    return -1;
-  }
-  if (unlikely(PyBytes_GET_SIZE(obj) > LIMIT_REQUEST_FIELD_SIZE)) {
+  size_t size = req->value_buf ? req->value_buf->len :
+      (req->value ? PyBytes_GET_SIZE(req->value) : 0);
+  if (len > LIMIT_REQUEST_FIELD_SIZE - size) {
     req->bad_request_code = 400;
     return -1;
   }
-
-  req->value = obj;
+  if (req->value == NULL && req->value_buf == NULL) {
+    req->value = PyBytes_FromStringAndSize(buf, len);
+    if (req->value == NULL) goto memory_error;
+  } else {
+    if (req->value_buf == NULL) {
+      req->value_buf = new_buffer(size + len + 1, LIMIT_REQUEST_FIELD_SIZE);
+      if (req->value_buf == NULL) goto memory_error;
+      if (write2buf(req->value_buf, PyBytes_AS_STRING(req->value), size) != WRITE_OK) {
+        goto memory_error;
+      }
+      Py_CLEAR(req->value);
+    }
+    if (write2buf(req->value_buf, buf, len) != WRITE_OK) goto memory_error;
+  }
   req->last_header_element = VALUE;
   return 0;
+
+memory_error:
+  req->bad_request_code = 500;
+  return -1;
 }
 
 static int url_cb(http_parser *p, const char *buf, size_t len) {
@@ -722,6 +718,7 @@ int headers_complete_cb(http_parser *p) {
   if (likely(req->path)) {
     ret = set_path(env, req->path->buf, req->path->len);
     free_buffer(req->path);
+    req->path = NULL;
     if (unlikely(ret == -1)) {
       // TODO Error
       return -1;
@@ -735,7 +732,7 @@ int headers_complete_cb(http_parser *p) {
   req->path = NULL;
 
   // Last header
-  if (likely(req->field && req->value)) {
+  if (likely(req->field && (req->value || req->value_buf))) {
     if (add_header(req) < 0) {
       return -1;
     }
@@ -884,7 +881,7 @@ size_t execute_parse(client_t *cli, const char *data, size_t len) {
 
 int parser_finish(client_t *cli) { return cli->complete; }
 
-void setup_static_env(char *name, int port) {
+int setup_static_env(char *name, int port) {
   empty_string = NATIVE_FROMSTRING("");
   separator_string = NATIVE_FROMSTRING(", ");
 
@@ -958,69 +955,90 @@ void setup_static_env(char *name, int port) {
   http_method_checkout = NATIVE_FROMSTRING("CHECKOUT");
   http_method_merge = NATIVE_FROMSTRING("MERGE");
 
-  // PycString_IMPORT;
+  /* Each request gets an independent dictionary with these shared values. */
+  base_environ = PyDict_New();
+  if (base_environ == NULL) {
+    return -1;
+  }
+  PyObject *items[][2] = {
+      {version_key, version_val}, {scheme_key, scheme_val},
+      {errors_key, errors_val}, {multithread_key, multithread_val},
+      {multiprocess_key, multiprocess_val}, {run_once_key, run_once_val},
+      {script_key, empty_string}, {server_name_key, server_name_val},
+      {server_port_key, server_port_val}, {file_wrapper_key, file_wrapper_val},
+  };
+  for (size_t i = 0; i < sizeof(items) / sizeof(items[0]); i++) {
+    if (items[i][0] == NULL || items[i][1] == NULL ||
+        PyDict_SetItem(base_environ, items[i][0], items[i][1]) < 0) {
+      return -1;
+    }
+  }
+  return 0;
 }
 
 void clear_static_env(void) {
   DEBUG("clear_static_env");
-  Py_DECREF(empty_string);
+  Py_CLEAR(base_environ);
+  Py_CLEAR(separator_string);
+  Py_CLEAR(empty_string);
 
-  Py_DECREF(version_key);
-  Py_DECREF(version_val);
-  Py_DECREF(scheme_key);
-  Py_DECREF(scheme_val);
-  Py_DECREF(errors_key);
-  /* Py_DECREF(errors_val); */
-  Py_DECREF(multithread_key);
-  Py_DECREF(multithread_val);
-  Py_DECREF(multiprocess_key);
-  Py_DECREF(multiprocess_val);
-  Py_DECREF(run_once_key);
-  Py_DECREF(run_once_val);
-  Py_DECREF(file_wrapper_key);
-  Py_DECREF(file_wrapper_val);
-  Py_DECREF(wsgi_input_key);
+  Py_CLEAR(version_key);
+  Py_CLEAR(version_val);
+  Py_CLEAR(scheme_key);
+  Py_CLEAR(scheme_val);
+  Py_CLEAR(errors_key);
+  /* errors_val is borrowed from sys.stderr. */
+  errors_val = NULL;
+  Py_CLEAR(multithread_key);
+  Py_CLEAR(multithread_val);
+  Py_CLEAR(multiprocess_key);
+  Py_CLEAR(multiprocess_val);
+  Py_CLEAR(run_once_key);
+  Py_CLEAR(run_once_val);
+  Py_CLEAR(file_wrapper_key);
+  Py_CLEAR(file_wrapper_val);
+  Py_CLEAR(wsgi_input_key);
 
-  Py_DECREF(script_key);
-  Py_DECREF(server_name_key);
-  Py_DECREF(server_name_val);
-  Py_DECREF(server_port_key);
-  Py_DECREF(server_port_val);
-  Py_DECREF(remote_addr_key);
-  Py_DECREF(remote_port_key);
+  Py_CLEAR(script_key);
+  Py_CLEAR(server_name_key);
+  Py_CLEAR(server_name_val);
+  Py_CLEAR(server_port_key);
+  Py_CLEAR(server_port_val);
+  Py_CLEAR(remote_addr_key);
+  Py_CLEAR(remote_port_key);
 
-  Py_DECREF(server_protocol_key);
-  Py_DECREF(path_info_key);
-  Py_DECREF(query_string_key);
-  Py_DECREF(request_method_key);
-  Py_DECREF(client_key);
+  Py_CLEAR(server_protocol_key);
+  Py_CLEAR(path_info_key);
+  Py_CLEAR(query_string_key);
+  Py_CLEAR(request_method_key);
+  Py_CLEAR(client_key);
 
-  Py_DECREF(content_type_key);
-  Py_DECREF(content_length_key);
-  Py_DECREF(h_content_type_key);
-  Py_DECREF(h_content_length_key);
+  Py_CLEAR(content_type_key);
+  Py_CLEAR(content_length_key);
+  Py_CLEAR(h_content_type_key);
+  Py_CLEAR(h_content_length_key);
 
-  Py_DECREF(server_protocol_val10);
-  Py_DECREF(server_protocol_val11);
+  Py_CLEAR(server_protocol_val10);
+  Py_CLEAR(server_protocol_val11);
 
-  Py_DECREF(http_method_delete);
-  Py_DECREF(http_method_get);
-  Py_DECREF(http_method_head);
-  Py_DECREF(http_method_post);
-  Py_DECREF(http_method_put);
-  Py_DECREF(http_method_patch);
-  Py_DECREF(http_method_connect);
-  Py_DECREF(http_method_options);
-  Py_DECREF(http_method_trace);
-  Py_DECREF(http_method_copy);
-  Py_DECREF(http_method_lock);
-  Py_DECREF(http_method_mkcol);
-  Py_DECREF(http_method_move);
-  Py_DECREF(http_method_propfind);
-  Py_DECREF(http_method_proppatch);
-  Py_DECREF(http_method_unlock);
-  Py_DECREF(http_method_report);
-  Py_DECREF(http_method_mkactivity);
-  Py_DECREF(http_method_checkout);
-  Py_DECREF(http_method_merge);
+  Py_CLEAR(http_method_delete);
+  Py_CLEAR(http_method_get);
+  Py_CLEAR(http_method_head);
+  Py_CLEAR(http_method_post);
+  Py_CLEAR(http_method_put);
+  Py_CLEAR(http_method_patch);
+  Py_CLEAR(http_method_connect);
+  Py_CLEAR(http_method_options);
+  Py_CLEAR(http_method_trace);
+  Py_CLEAR(http_method_copy);
+  Py_CLEAR(http_method_lock);
+  Py_CLEAR(http_method_mkcol);
+  Py_CLEAR(http_method_move);
+  Py_CLEAR(http_method_propfind);
+  Py_CLEAR(http_method_proppatch);
+  Py_CLEAR(http_method_unlock);
+  Py_CLEAR(http_method_report);
+  Py_CLEAR(http_method_mkactivity);
+  Py_CLEAR(http_method_checkout);
+  Py_CLEAR(http_method_merge);
 }

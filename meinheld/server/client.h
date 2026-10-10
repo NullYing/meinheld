@@ -49,7 +49,6 @@ PyObject *ClientObject_New(client_t *client);
 
 int CheckClientObject(PyObject *obj);
 
-void ClientObject_list_fill(void);
 
 void ClientObject_list_clear(void);
 

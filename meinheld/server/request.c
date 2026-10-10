@@ -4,18 +4,9 @@
 
 /* use free_list */
 #define REQUEST_MAXFREELIST 1024
-#define HEADER_MAXFREELIST 1024 * 16
 
 static request *request_free_list[REQUEST_MAXFREELIST];
 static int request_numfree = 0;
-
-void request_list_fill(void) {
-  request *req;
-  while (request_numfree < REQUEST_MAXFREELIST) {
-    req = (request *)PyMem_Malloc(sizeof(request));
-    request_free_list[request_numfree++] = req;
-  }
-}
 
 void request_list_clear(void) {
   request *op;
@@ -34,6 +25,10 @@ static request *alloc_request(void) {
   } else {
     req = (request *)PyMem_Malloc(sizeof(request));
     GDEBUG("alloc req %p", req);
+  }
+  if (req == NULL) {
+    PyErr_NoMemory();
+    return NULL;
   }
   memset(req, 0, sizeof(request));
   return req;
@@ -95,15 +90,12 @@ request *shift_request(request_queue *q) {
   return temp_req;
 }
 
-request *new_request(void) {
-  request *req = alloc_request();
-  // request *req = (request *)PyMem_Malloc(sizeof(request));
-  memset(req, 0, sizeof(request));
-  return req;
-}
+request *new_request(void) { return alloc_request(); }
 
 void free_request(request *req) {
-  Py_XDECREF(req->path);
+  if (req->path) free_buffer(req->path);
+  if (req->field_buf) free_buffer(req->field_buf);
+  if (req->value_buf) free_buffer(req->value_buf);
   Py_XDECREF(req->field);
   Py_XDECREF(req->value);
   dealloc_request(req);

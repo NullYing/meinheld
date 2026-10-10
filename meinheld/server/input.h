@@ -13,7 +13,6 @@ typedef struct {
 
 extern PyTypeObject InputObjectType;
 
-void InputObject_list_fill(void);
 
 void InputObject_list_clear(void);
 

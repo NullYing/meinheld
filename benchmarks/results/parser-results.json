@@ -1,0 +1,192 @@
+{
+  "baseline": [
+    {
+      "root": "baseline",
+      "fragment_bytes": 4141,
+      "cpu_us_per_request": 16.96254,
+      "samples": [
+        17.01368,
+        16.96254,
+        17.00148,
+        16.89,
+        16.8691
+      ]
+    },
+    {
+      "root": "baseline",
+      "fragment_bytes": 32,
+      "cpu_us_per_request": 26.9401,
+      "samples": [
+        27.1842,
+        26.8812,
+        26.9443,
+        26.6458,
+        26.9401
+      ]
+    },
+    {
+      "root": "baseline",
+      "fragment_bytes": 1,
+      "cpu_us_per_request": 273.4655,
+      "samples": [
+        275.3455,
+        272.6225,
+        272.8815,
+        273.4655,
+        273.5015
+      ]
+    }
+  ],
+  "stage1": [
+    {
+      "root": "stage1",
+      "fragment_bytes": 4141,
+      "cpu_us_per_request": 16.83324,
+      "samples": [
+        17.3777,
+        16.79,
+        16.88122,
+        16.82536,
+        16.83324
+      ]
+    },
+    {
+      "root": "stage1",
+      "fragment_bytes": 32,
+      "cpu_us_per_request": 26.9707,
+      "samples": [
+        26.9575,
+        26.9707,
+        27.4313,
+        26.8536,
+        26.975
+      ]
+    },
+    {
+      "root": "stage1",
+      "fragment_bytes": 1,
+      "cpu_us_per_request": 276.126,
+      "samples": [
+        276.126,
+        273.934,
+        275.67,
+        277.291,
+        290.4705
+      ]
+    }
+  ],
+  "stage3": [
+    {
+      "root": "stage3",
+      "fragment_bytes": 4141,
+      "cpu_us_per_request": 16.91854,
+      "samples": [
+        17.15062,
+        16.72308,
+        16.8648,
+        17.3574,
+        16.91854
+      ]
+    },
+    {
+      "root": "stage3",
+      "fragment_bytes": 32,
+      "cpu_us_per_request": 26.7319,
+      "samples": [
+        26.9463,
+        26.9079,
+        26.6095,
+        26.6784,
+        26.7319
+      ]
+    },
+    {
+      "root": "stage3",
+      "fragment_bytes": 1,
+      "cpu_us_per_request": 289.468,
+      "samples": [
+        289.468,
+        281.0165,
+        290.9845,
+        299.0505,
+        282.5225
+      ]
+    }
+  ],
+  "stage4": [
+    {
+      "root": "stage4",
+      "fragment_bytes": 4141,
+      "cpu_us_per_request": 16.50546,
+      "samples": [
+        16.96422,
+        16.50546,
+        16.50332,
+        16.6077,
+        16.47476
+      ]
+    },
+    {
+      "root": "stage4",
+      "fragment_bytes": 32,
+      "cpu_us_per_request": 18.9532,
+      "samples": [
+        18.888,
+        19.0038,
+        18.8354,
+        18.9532,
+        19.0038
+      ]
+    },
+    {
+      "root": "stage4",
+      "fragment_bytes": 1,
+      "cpu_us_per_request": 52.4895,
+      "samples": [
+        52.381,
+        52.4895,
+        52.349,
+        52.5145,
+        53.148
+      ]
+    }
+  ],
+  "stage5": [
+    {
+      "root": "stage5",
+      "fragment_bytes": 4141,
+      "cpu_us_per_request": 16.5797,
+      "samples": [
+        16.87172,
+        16.5797,
+        16.51292,
+        16.52528,
+        16.7898
+      ]
+    },
+    {
+      "root": "stage5",
+      "fragment_bytes": 32,
+      "cpu_us_per_request": 19.1319,
+      "samples": [
+        18.9963,
+        19.1095,
+        19.9859,
+        19.1462,
+        19.1319
+      ]
+    },
+    {
+      "root": "stage5",
+      "fragment_bytes": 1,
+      "cpu_us_per_request": 54.3455,
+      "samples": [
+        52.5515,
+        55.463,
+        54.3455,
+        53.993,
+        54.8845
+      ]
+    }
+  ]
+}

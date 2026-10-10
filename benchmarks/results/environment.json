@@ -1,0 +1,18 @@
+{
+  "python": "3.12.7 (v3.12.7:0b05ead877f, Sep 30 2024, 23:18:00) [Clang 13.0.0 (clang-1300.0.29.30)]",
+  "platform": "macOS-27.0.1-arm64-arm-64bit",
+  "machine": "arm64",
+  "baseline_commit": "e6e2515",
+  "packages": {
+    "greenlet": "3.5.1",
+    "gunicorn": "26.0.0",
+    "Flask": "3.1.3"
+  },
+  "http_load": {
+    "concurrency": 16,
+    "warmup": 2000,
+    "requests_per_sample": 100000,
+    "repeats": 5,
+    "keepalive": true
+  }
+}

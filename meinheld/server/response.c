@@ -738,17 +738,14 @@ response_status close_response(client_t *client) {
     // closing reponse object
     if (client->response && PyObject_HasAttrString(client->response, "close")) {
       PyObject *close = NULL;
-      PyObject *args = NULL;
       PyObject *data = NULL;
 
       close = PyObject_GetAttrString(client->response, "close");
 
-      args = PyTuple_New(0);
-      data = PyObject_CallObject(close, args);
+      data = close ? PyObject_CallNoArgs(close) : NULL;
       DEBUG("call response object close");
-      Py_DECREF(args);
       Py_XDECREF(data);
-      Py_DECREF(close);
+      Py_XDECREF(close);
       client->response_closed = 1;
       if (PyErr_Occurred()) {
         return STATUS_ERROR;
@@ -1234,7 +1231,7 @@ static PyObject *FileWrapperObject_close(FileWrapperObject *self,
   method = PyObject_GetAttrString(self->filelike, "close");
 
   if (method) {
-    result = PyObject_CallObject(method, (PyObject *)NULL);
+    result = PyObject_CallNoArgs(method);
     if (!result) PyErr_Clear();
     Py_DECREF(method);
   }

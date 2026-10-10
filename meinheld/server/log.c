@@ -26,18 +26,15 @@ int set_err_logger(PyObject *obj) {
 }
 
 int call_access_logger(PyObject *environ) {
-  PyObject *args = NULL, *res = NULL;
+  PyObject *res = NULL;
 
   if (access_logger) {
     if (environ == NULL) {
       environ = Py_None;
-      Py_INCREF(environ);
     }
 
     DEBUG("call access logger %p", access_logger);
-    args = PyTuple_Pack(1, environ);
-    res = PyObject_CallObject(access_logger, args);
-    Py_DECREF(args);
+    res = PyObject_CallOneArg(access_logger, environ);
     Py_XDECREF(res);
     if (PyErr_Occurred()) {
       PyErr_Print();
@@ -49,7 +46,7 @@ int call_access_logger(PyObject *environ) {
 
 int call_error_logger(void) {
   PyObject *exception = NULL, *v = NULL, *tb = NULL;
-  PyObject *args = NULL, *res = NULL;
+  PyObject *res = NULL;
 
   if (err_logger) {
     PyErr_Fetch(&exception, &v, &tb);
@@ -75,14 +72,9 @@ int call_error_logger(void) {
     }
     PyErr_Clear();
 
-    args = PyTuple_Pack(3, exception, v, tb);
-    if (args == NULL) {
-      PyErr_Print();
-      goto err;
-    }
     DEBUG("call error logger %p", err_logger);
-    res = PyObject_CallObject(err_logger, args);
-    Py_DECREF(args);
+    PyObject *args[3] = {exception, v, tb};
+    res = PyObject_Vectorcall(err_logger, args, 3, NULL);
     Py_XDECREF(res);
     Py_XDECREF(exception);
     Py_XDECREF(v);

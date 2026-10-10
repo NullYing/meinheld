@@ -178,14 +178,6 @@ static void destroy_pendings(void) {
   g_pendings = NULL;
 }
 
-static void client_t_list_fill(void) {
-  client_t *client;
-  while (client_numfree < CLIENT_MAXFREELIST) {
-    client = (client_t *)PyMem_Malloc(sizeof(client_t));
-    client_free_list[client_numfree++] = client;
-  }
-}
-
 static void client_t_list_clear(void) {
   client_t *op;
 
@@ -203,6 +195,10 @@ static client_t *alloc_client_t(void) {
   } else {
     client = (client_t *)PyMem_Malloc(sizeof(client_t));
     GDEBUG("alloc %p", client);
+  }
+  if (client == NULL) {
+    PyErr_NoMemory();
+    return NULL;
   }
   memset(client, 0, sizeof(client_t));
   return client;
@@ -286,10 +282,14 @@ static void clean_client(client_t *client) {
     } else {
       if (client->status_code != 408) {
         environ = new_environ(client);
-        set_log_value(client, environ, delta_msec);
-        call_access_logger(environ);
-        /* No request owns this temporary logging environment. */
-        Py_DECREF(environ);
+        if (environ == NULL) {
+          call_error_logger();
+        } else {
+          set_log_value(client, environ, delta_msec);
+          call_access_logger(environ);
+          /* No request owns this temporary logging environment. */
+          Py_DECREF(environ);
+        }
       }
     }
   }
@@ -482,19 +482,15 @@ static int check_status_code(client_t *client) {
   return 1;
 }
 
-static PyObject *app_handler(PyObject *self, PyObject *args) {
+static PyObject *app_handler(PyObject *self, PyObject *env) {
   int ret, active;
-  PyObject *wsgi_args = NULL, *start = NULL, *current = NULL, *parent = NULL,
+  PyObject *start = NULL, *current = NULL, *parent = NULL,
            *res = NULL;
-  PyObject *env = NULL;
   ClientObject *pyclient;
   client_t *client;
   request *req;
   response_status status;
 
-  if (!PyArg_ParseTuple(args, "O:app_handler", &env)) {
-    return NULL;
-  }
   pyclient = (ClientObject *)PyDict_GetItem(env, client_key);
   client = pyclient->client;
 
@@ -506,9 +502,8 @@ static PyObject *app_handler(PyObject *self, PyObject *args) {
   }
 
   DEBUG("call wsgi app");
-  wsgi_args = PyTuple_Pack(2, env, start);
-  res = PyObject_CallObject(wsgi_app, wsgi_args);
-  Py_DECREF(wsgi_args);
+  PyObject *wsgi_args[2] = {env, start};
+  res = PyObject_Vectorcall(wsgi_app, wsgi_args, 2, NULL);
   DEBUG("called wsgi app");
 
   // check response & PyErr_Occurred
@@ -600,7 +595,7 @@ error:
 }
 
 static PyMethodDef app_handler_def = {"_app_handler", (PyCFunction)app_handler,
-                                      METH_VARARGS, 0};
+                                      METH_O, 0};
 
 static PyObject *get_app_handler(void) {
   if (app_handler_func == NULL) {
@@ -667,7 +662,10 @@ static void resume_wsgi_handler(ClientObject *pyclient) {
 #endif
 
 static void call_wsgi_handler(client_t *client) {
-  PyObject *handler, *greenlet, *args, *res;
+  PyObject *handler, *res;
+#ifdef WITH_GREENLET
+  PyObject *greenlet, *args;
+#endif
   ClientObject *pyclient;
   request *req = NULL;
 
@@ -676,8 +674,15 @@ static void call_wsgi_handler(client_t *client) {
   current_client = PyDict_GetItem(req->environ, client_key);
   pyclient = (ClientObject *)current_client;
 
-  args = PyTuple_Pack(1, req->environ);
 #ifdef WITH_GREENLET
+  args = PyTuple_Pack(1, req->environ);
+  if (args == NULL) {
+    call_error_logger();
+    client->status_code = 500;
+    send_error_page(client);
+    close_client(client);
+    return;
+  }
   // new greenlet
   greenlet = greenlet_new(handler, NULL);
   // set_greenlet
@@ -690,8 +695,7 @@ static void call_wsgi_handler(client_t *client) {
   Py_DECREF(greenlet);
 #else
   pyclient->greenlet = NULL;
-  res = PyObject_CallObject(handler, args);
-  Py_DECREF(args);
+  res = PyObject_CallOneArg(handler, req->environ);
 #endif
   Py_XDECREF(res);
 }
@@ -1229,18 +1233,14 @@ static void accept_callback(picoev_loop *loop, int fd, int events,
   }
 }
 
-static void setup_server_env(void) {
+static int setup_server_env(void) {
   /* setup_listen_sock(listen_sock); */
   cache_time_init();
-  setup_static_env(server_name, server_port);
+  if (setup_static_env(server_name, server_port) < 0) {
+    clear_static_env();
+    return -1;
+  }
   setup_start_response();
-
-  ClientObject_list_fill();
-  client_t_list_fill();
-  parser_list_fill();
-  request_list_fill();
-  buffer_list_fill();
-  InputObject_list_fill();
 
   client_key = NATIVE_FROMSTRING("meinheld.client");
   wsgi_input_key = NATIVE_FROMSTRING("wsgi.input");
@@ -1250,6 +1250,7 @@ static void setup_server_env(void) {
   request_time_key = NATIVE_FROMSTRING("REQUEST_TIME");
   local_time_key = NATIVE_FROMSTRING("LOCAL_TIME");
   empty_string = NATIVE_FROMSTRING("");
+  return 0;
 }
 
 static void clear_server_env(void) {
@@ -1720,7 +1721,10 @@ static PyObject *meinheld_run_loop(PyObject *self, PyObject *args,
   }
 
   Py_INCREF(wsgi_app);
-  setup_server_env();
+  if (setup_server_env() < 0) {
+    Py_CLEAR(wsgi_app);
+    return NULL;
+  }
 
   init_main_loop();
   loop_done = 1;
@@ -1752,7 +1756,7 @@ static PyObject *meinheld_run_loop(PyObject *self, PyObject *args,
       if (tempfile_fd) {
         fast_notify();
       } else if (watchdog) {
-        watchdog_result = PyObject_CallFunction(watchdog, NULL);
+        watchdog_result = PyObject_CallNoArgs(watchdog);
         if (PyErr_Occurred()) {
           PyErr_Print();
           PyErr_Clear();

@@ -9,14 +9,6 @@
 static ClientObject *client_free_list[CLIENT_MAXFREELIST];
 static int client_numfree = 0;
 
-void ClientObject_list_fill(void) {
-  ClientObject *client;
-  while (client_numfree < CLIENT_MAXFREELIST) {
-    client = PyObject_NEW(ClientObject, &ClientObjectType);
-    client_free_list[client_numfree++] = client;
-  }
-}
-
 void ClientObject_list_clear(void) {
   ClientObject *op;
 
@@ -30,7 +22,7 @@ static ClientObject *alloc_ClientObject(void) {
   ClientObject *client;
   if (client_numfree) {
     client = client_free_list[--client_numfree];
-    _Py_NewReference((PyObject *)client);
+    PyObject_Init((PyObject *)client, &ClientObjectType);
     GDEBUG("use pooled %p", client);
   } else {
     client = PyObject_NEW(ClientObject, &ClientObjectType);

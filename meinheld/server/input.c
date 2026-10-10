@@ -5,14 +5,6 @@
 static InputObject *io_free_list[IO_MAXFREELIST];
 static int io_numfree = 0;
 
-void InputObject_list_fill(void) {
-  InputObject *io;
-  while (io_numfree < IO_MAXFREELIST) {
-    io = PyObject_NEW(InputObject, &InputObjectType);
-    io_free_list[io_numfree++] = io;
-  }
-}
-
 void InputObject_list_clear(void) {
   InputObject *op;
 
@@ -26,7 +18,7 @@ static InputObject *alloc_InputObject(void) {
   InputObject *io;
   if (io_numfree) {
     io = io_free_list[--io_numfree];
-    _Py_NewReference((PyObject *)io);
+    PyObject_Init((PyObject *)io, &InputObjectType);
     // DEBUG("use pooled StringIOObject %p", io);
   } else {
     io = PyObject_NEW(InputObject, &InputObjectType);
@@ -225,8 +217,6 @@ static struct PyMethodDef InputObject_methods[] = {
     {"readline", (PyCFunction)InputObject_readline, METH_VARARGS, ""},
     {"readlines", (PyCFunction)InputObject_readlines, METH_VARARGS, ""},
     {NULL, NULL}};
-
-
 
 PyTypeObject InputObjectType = {
 #ifdef PY3

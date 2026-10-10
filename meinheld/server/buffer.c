@@ -4,17 +4,9 @@
 
 #define MAXFREELIST 1024 * 16 * 2
 
+/* Populate the bounded reuse pool only as requests need objects. */
 static buffer_t *buffer_free_list[MAXFREELIST];
 static int numfree = 0;
-
-void buffer_list_fill(void) {
-  buffer_t *buf;
-
-  while (numfree < MAXFREELIST) {
-    buf = (buffer_t *)PyMem_Malloc(sizeof(buffer_t));
-    buffer_free_list[numfree++] = buf;
-  }
-}
 
 void buffer_list_clear(void) {
   buffer_t *op;
@@ -33,6 +25,10 @@ static buffer_t *alloc_buffer(void) {
   } else {
     buf = (buffer_t *)PyMem_Malloc(sizeof(buffer_t));
     // DEBUG("alloc buf %p", buf);
+  }
+  if (buf == NULL) {
+    PyErr_NoMemory();
+    return NULL;
   }
   memset(buf, 0, sizeof(buffer_t));
   return buf;
@@ -87,8 +83,17 @@ buffer_t *new_buffer(size_t buf_size, size_t limit) {
   // buf = PyMem_Malloc(sizeof(buffer));
   // memset(buf, 0, sizeof(buffer));
   buf = alloc_buffer();
+  if (buf == NULL) {
+    PyErr_NoMemory();
+    return NULL;
+  }
 
   buf->buf = PyMem_Malloc(sizeof(char) * buf_size);
+  if (buf->buf == NULL) {
+    dealloc_buffer(buf);
+    PyErr_NoMemory();
+    return NULL;
+  }
   buf->buf_size = buf_size;
   if (limit) {
     buf->limit = limit;
@@ -116,7 +121,7 @@ buffer_result write2buf(buffer_t *buf, const char *c, size_t l) {
     newbuf = (char *)PyMem_Realloc(buf->buf, buf->buf_size);
     if (!newbuf) {
       PyErr_SetString(PyExc_MemoryError, "out of memory");
-      free(buf->buf);
+      PyMem_Free(buf->buf);
       buf->buf = 0;
       buf->buf_size = buf->len = 0;
       return MEMORY_ERROR;

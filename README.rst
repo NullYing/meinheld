@@ -205,6 +205,14 @@ It is built around the high performance event library picoev.
 
 (see http://developer.cybozu.co.jp/kazuho/2009/08/picoev-a-tiny-e.html)
 
+Python 3.12 hot paths use public vectorcall APIs, a copied base WSGI environment,
+lazy access-log fields, and growing buffers for fragmented request headers.
+Object reuse pools populate on demand rather than preallocating every slot.
+Each request retains its own mutable environment dictionary.
+
+See ``benchmarks/README.md`` for reproducible benchmarks and compatibility checks,
+and ``benchmarks/RESULTS.md`` for local measurements and their limitations.
+
 Sendfile
 ===========================
 

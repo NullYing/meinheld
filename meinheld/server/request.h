@@ -40,6 +40,9 @@ typedef struct {
 
   PyObject *field;
   PyObject *value;
+  /* Allocated only when a header spans multiple parser callbacks. */
+  buffer_t *field_buf;
+  buffer_t *value_buf;
   uintptr_t start_msec;
 } request;
 
@@ -63,7 +66,6 @@ void free_request(request *req);
 
 void dealloc_request(request *req);
 
-void request_list_fill(void);
 
 void request_list_clear(void);
 

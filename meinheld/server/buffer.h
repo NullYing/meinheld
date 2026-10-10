@@ -26,7 +26,6 @@ PyObject *getPyString(buffer_t *buf);
 
 char *getString(buffer_t *buf);
 
-void buffer_list_fill(void);
 
 void buffer_list_clear(void);
 #endif

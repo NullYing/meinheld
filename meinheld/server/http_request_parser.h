@@ -11,11 +11,10 @@ size_t execute_parse(client_t *cli, const char *data, size_t len);
 
 int parser_finish(client_t *cli);
 
-void setup_static_env(char *name, int port);
+int setup_static_env(char *name, int port);
 
 void clear_static_env(void);
 
-void parser_list_fill(void);
 
 void parser_list_clear(void);
 

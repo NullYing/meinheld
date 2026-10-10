@@ -5,4 +5,7 @@ include meinheld/server/picoev_epoll.c
 include meinheld/server/picoev_kqueue.c
 include meinheld/server/picoev_select.c
 include meinheld/server/*.h
+recursive-include benchmarks *.py *.c *.md *.json
+include tests/test_access_format.py
+include tests/test_wsgi_optimizations.py
 

@@ -1,0 +1,95 @@
+{
+  "app": "tiny",
+  "log": "none",
+  "long_header": false,
+  "samples": {
+    "baseline": [
+      {
+        "requests": 82000,
+        "cpu_us_per_request": 18.21471951219512,
+        "peak_rss_mib": 27.8125,
+        "qps": 53247.68,
+        "p99_ms": 1
+      },
+      {
+        "requests": 82000,
+        "cpu_us_per_request": 15.168585365853659,
+        "peak_rss_mib": 26.546875,
+        "qps": 63969.35,
+        "p99_ms": 1
+      },
+      {
+        "requests": 82000,
+        "cpu_us_per_request": 15.766414634146342,
+        "peak_rss_mib": 26.34375,
+        "qps": 61718.78,
+        "p99_ms": 1
+      },
+      {
+        "requests": 82000,
+        "cpu_us_per_request": 15.544914634146341,
+        "peak_rss_mib": 26.71875,
+        "qps": 62435.66,
+        "p99_ms": 1
+      },
+      {
+        "requests": 82000,
+        "cpu_us_per_request": 14.445829268292682,
+        "peak_rss_mib": 26.125,
+        "qps": 66756.4,
+        "p99_ms": 0
+      }
+    ],
+    "stage1": [
+      {
+        "requests": 82000,
+        "cpu_us_per_request": 16.239731707317073,
+        "peak_rss_mib": 27.53125,
+        "qps": 59458.03,
+        "p99_ms": 1
+      },
+      {
+        "requests": 82000,
+        "cpu_us_per_request": 15.320512195121951,
+        "peak_rss_mib": 26.234375,
+        "qps": 63175.53,
+        "p99_ms": 1
+      },
+      {
+        "requests": 82000,
+        "cpu_us_per_request": 14.885926829268293,
+        "peak_rss_mib": 26.703125,
+        "qps": 65065.94,
+        "p99_ms": 1
+      },
+      {
+        "requests": 82000,
+        "cpu_us_per_request": 15.342292682926827,
+        "peak_rss_mib": 26.421875,
+        "qps": 63260.86,
+        "p99_ms": 1
+      },
+      {
+        "requests": 82000,
+        "cpu_us_per_request": 18.491182926829264,
+        "peak_rss_mib": 26.0625,
+        "qps": 50832.99,
+        "p99_ms": 1
+      }
+    ]
+  },
+  "medians": {
+    "baseline": {
+      "qps": 62435.66,
+      "p99_ms": 1,
+      "cpu_us_per_request": 15.544914634146341,
+      "peak_rss_mib": 26.546875
+    },
+    "stage1": {
+      "qps": 63175.53,
+      "p99_ms": 1,
+      "cpu_us_per_request": 15.342292682926827,
+      "peak_rss_mib": 26.421875
+    }
+  }
+}
