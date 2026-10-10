@@ -13,7 +13,7 @@ You can also join us in `meinheld mailing list`_.
 Requirements
 ---------------------------------
 
-Meinheld requires **Python 2.x >= 2.6** or **Python 3.x >= 3.5** . and **greenlet >= 0.4.5**.
+Meinheld requires **Python >= 3.9** and **greenlet >= 3.0.0, < 4.0.0**.
 
 Meinheld supports Linux, FreeBSD, and macOS.
 
@@ -58,6 +58,23 @@ simple wsgi app:
 with gunicorn. user worker class "egg:meinheld#gunicorn_worker" or "meinheld.gmeinheld.MeinheldWorker"::
 
     $ gunicorn --workers=2 --worker-class="egg:meinheld#gunicorn_worker" gunicorn_test:app
+
+The worker honors ``--max-requests`` and ``--max-requests-jitter`` independently
+of access logging. At the limit it stops accepting new connections, disables
+keep-alive, and lets active responses finish within ``--graceful-timeout``.
+``--max-requests=0`` disables recycling.
+
+Lifecycle regression tests
+---------------------------------
+
+With greenlet, Gunicorn and setuptools installed, build the extension and run
+the isolated loopback tests::
+
+    $ python setup.py build_ext --inplace
+    $ python -m unittest discover -s tests -p test_worker_lifecycle.py -v
+
+These tests cover logging environment lifetimes, cooperative switching,
+request limits, jitter, and concurrent responses during worker recycling.
 
 Continuation
 ---------------------------------

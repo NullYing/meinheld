@@ -12,29 +12,13 @@ extern "C" {
 #endif
 
 typedef struct _greenlet {
-  PyObject_HEAD char* stack_start;
-  char* stack_stop;
-  char* stack_copy;
-  intptr_t stack_saved;
-  struct _greenlet* stack_prev;
-  struct _greenlet* parent;
-  PyObject* run_info;
-  struct _frame* top_frame;
-  int recursion_depth;
+  PyObject_HEAD
   PyObject* weakreflist;
-  PyObject* exc_type;
-  PyObject* exc_value;
-  PyObject* exc_traceback;
   PyObject* dict;
+  void* pimpl;
 } PyGreenlet;
 
-#define PyGreenlet_Check(op) PyObject_TypeCheck(op, &PyGreenlet_Type)
-#define PyGreenlet_MAIN(op) (((PyGreenlet*)(op))->stack_stop == (char*)-1)
-#define PyGreenlet_STARTED(op) (((PyGreenlet*)(op))->stack_stop != NULL)
-#define PyGreenlet_ACTIVE(op) (((PyGreenlet*)(op))->stack_start != NULL)
-#define PyGreenlet_GET_PARENT(op) (((PyGreenlet*)(op))->parent)
-/* Backward compatibility with newer greenlet versions */
-#define PyGreenlet_GetParent(op) (((PyGreenlet*)(op))->parent)
+#define PyGreenlet_Check(op) (op && PyObject_TypeCheck(op, &PyGreenlet_Type))
 
 #if (PY_MAJOR_VERSION == 2 && PY_MINOR_VERSION >= 7) || \
     (PY_MAJOR_VERSION == 3 && PY_MINOR_VERSION >= 1) || PY_MAJOR_VERSION > 3
@@ -44,7 +28,7 @@ typedef struct _greenlet {
 /* C API functions */
 
 /* Total number of symbols that are exported */
-#define PyGreenlet_API_pointers 8
+#define PyGreenlet_API_pointers 12
 
 #define PyGreenlet_Type_NUM 0
 #define PyExc_GreenletError_NUM 1
@@ -55,6 +39,10 @@ typedef struct _greenlet {
 #define PyGreenlet_Throw_NUM 5
 #define PyGreenlet_Switch_NUM 6
 #define PyGreenlet_SetParent_NUM 7
+#define PyGreenlet_MAIN_NUM 8
+#define PyGreenlet_STARTED_NUM 9
+#define PyGreenlet_ACTIVE_NUM 10
+#define PyGreenlet_GET_PARENT_NUM 11
 
 #ifndef GREENLET_MODULE
 /* This section is used by modules that uses the greenlet C API */
@@ -113,8 +101,22 @@ static void** _PyGreenlet_API = NULL;
  * g.parent = new_parent
  */
 #define PyGreenlet_SetParent                                      \
-  (*(PyObject * (*)(PyGreenlet * greenlet, PyGreenlet * nparent)) \
+  (*(int (*)(PyGreenlet * greenlet, PyGreenlet * nparent)) \
        _PyGreenlet_API[PyGreenlet_SetParent_NUM])
+
+/* Greenlet 3.x keeps its execution state behind pimpl. Use the C API rather
+ * than reading fields from the pre-1.0 object layout. GetParent returns a
+ * new reference, or NULL for the main greenlet. */
+#define PyGreenlet_GetParent \
+  (*(PyGreenlet * (*)(PyGreenlet * greenlet)) \
+       _PyGreenlet_API[PyGreenlet_GET_PARENT_NUM])
+#define PyGreenlet_GET_PARENT PyGreenlet_GetParent
+#define PyGreenlet_MAIN \
+  (*(int (*)(PyGreenlet * greenlet)) _PyGreenlet_API[PyGreenlet_MAIN_NUM])
+#define PyGreenlet_STARTED \
+  (*(int (*)(PyGreenlet * greenlet)) _PyGreenlet_API[PyGreenlet_STARTED_NUM])
+#define PyGreenlet_ACTIVE \
+  (*(int (*)(PyGreenlet * greenlet)) _PyGreenlet_API[PyGreenlet_ACTIVE_NUM])
 
 /* Macro that imports greenlet and initializes C API */
 #ifdef GREENLET_USE_PYCAPSULE

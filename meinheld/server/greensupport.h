@@ -10,7 +10,7 @@ extern PyObject *greenlet_error;
 
 PyObject *greenlet_getcurrent(void);
 PyObject *greenlet_new(PyObject *o, PyObject *parent);
-PyObject *greenlet_setparent(PyObject *g, PyObject *parent);
+int greenlet_setparent(PyObject *g, PyObject *parent);
 PyObject *greenlet_getparent(PyObject *g);
 PyObject *greenlet_switch(PyObject *g, PyObject *args, PyObject *kwargs);
 PyObject *greenlet_throw(PyObject *g, PyObject *typ, PyObject *val,

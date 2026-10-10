@@ -514,9 +514,9 @@ static int add_header(request *req) {
       goto end;
     }
     PyObject *w = PyUnicode_Concat(u, v);
+    Py_DECREF(u);
     Py_DECREF(v);
     if (w == NULL) {
-      Py_DECREF(u);
       goto end;
     }
     ret = PyDict_SetItem(env, req->field, w);

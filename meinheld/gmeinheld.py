@@ -29,6 +29,16 @@ class MeinheldWorker(Worker):
             self.log.info("Parent changed, shutting down: %s" % self)
             server.stop(int(self.timeout))
 
+    def handle_request(self, environ, start_response):
+        self.nr += 1
+        # Worker.__init__ already includes max_requests_jitter in this limit.
+        if self.nr >= self.max_requests and self.alive:
+            self.alive = False
+            self.log.info("Autorestarting worker after current request.")
+            server.set_keepalive(0)
+            server.stop(self.cfg.graceful_timeout)
+        return self.wsgi(environ, start_response)
+
     def run(self):
 
         if hasattr(self, "sockets"):
@@ -43,8 +53,9 @@ class MeinheldWorker(Worker):
         #server.set_watchdog(self.watchdog)
 
         server.set_listen_socket(fds)
+        app = self.handle_request if self.cfg.max_requests > 0 else self.wsgi
         try:
-            server.run(self.wsgi)
+            server.run(app)
         except KeyboardInterrupt:
             pass
 

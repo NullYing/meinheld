@@ -288,6 +288,8 @@ static void clean_client(client_t *client) {
         environ = new_environ(client);
         set_log_value(client, environ, delta_msec);
         call_access_logger(environ);
+        /* No request owns this temporary logging environment. */
+        Py_DECREF(environ);
       }
     }
   }
@@ -549,6 +551,7 @@ static PyObject *app_handler(PyObject *self, PyObject *args) {
 
       /* Py_INCREF(hub_switch_value); */
       res = greenlet_switch(parent, hub_switch_value, NULL);
+      Py_DECREF(parent);
       Py_XDECREF(res);
 
       // try again after event switch
@@ -1991,6 +1994,7 @@ PyObject *meinheld_suspend_client(PyObject *self, PyObject *args) {
     }
     /* Py_INCREF(hub_switch_value); */
     res = greenlet_switch(parent, hub_switch_value, NULL);
+    Py_DECREF(parent);
     return res;
   } else {
     PyErr_SetString(PyExc_IOError, "already suspended");
@@ -2155,6 +2159,7 @@ static PyObject *meinheld_trampoline(PyObject *self, PyObject *args,
 
     /* Py_INCREF(hub_switch_value); */
     res = greenlet_switch(parent, hub_switch_value, NULL);
+    Py_DECREF(parent);
     return res;
   } else {
     DEBUG("call from greenlet");
@@ -2174,6 +2179,7 @@ static PyObject *meinheld_trampoline(PyObject *self, PyObject *args,
            event, current, parent, current);
     /* Py_INCREF(hub_switch_value); */
     res = greenlet_switch(parent, hub_switch_value, NULL);
+    Py_DECREF(parent);
     return res;
   }
 #else
@@ -2231,6 +2237,10 @@ static PyObject *meinheld_sleep(PyObject *self, PyObject *args,
   res = internal_schedule_call(sec, NULL, NULL, NULL, current);
   Py_XDECREF(res);
   res = greenlet_switch(parent, hub_switch_value, NULL);
+  Py_DECREF(parent);
+  if (res == NULL) {
+    return NULL;
+  }
   Py_XDECREF(res);
 
   Py_RETURN_NONE;

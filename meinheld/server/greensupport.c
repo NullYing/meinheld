@@ -26,7 +26,7 @@ PyObject *greenlet_new(PyObject *o, PyObject *parent) {
   return (PyObject *)PyGreenlet_New(o, (PyGreenlet *)parent);
 }
 
-PyObject *greenlet_setparent(PyObject *g, PyObject *parent) {
+int greenlet_setparent(PyObject *g, PyObject *parent) {
   import_greenlet();
   return PyGreenlet_SetParent((PyGreenlet *)g, (PyGreenlet *)parent);
 }
